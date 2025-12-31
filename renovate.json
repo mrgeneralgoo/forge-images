@@ -6,7 +6,7 @@
   "packageRules": [
     {
       "matchDatasources": ["docker"],
-      "matchPackageNames": ["serversideup/php", "mrgeneralgoo/php-base"],
+      "matchPackageNames": ["serversideup/php"],
       "pinDigests": true
     }
   ],
