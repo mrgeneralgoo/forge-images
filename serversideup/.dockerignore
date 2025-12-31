@@ -1,0 +1,4 @@
+.git
+.env
+base-image.digest
+**/.DS_Store
