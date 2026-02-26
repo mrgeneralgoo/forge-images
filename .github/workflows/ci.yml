@@ -1,0 +1,45 @@
+name: Container CI
+
+on:
+  pull_request:
+    paths:
+      - '**/Dockerfile'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        container: [serversideup]
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check if Dockerfile changed
+        id: check_changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            changed:
+              - '${{ matrix.container }}/**'
+
+      - name: Set up Docker Buildx
+        if: steps.check_changes.outputs.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Test ${{ matrix.container }}
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          echo "Building ${{ matrix.container }}..."
+          docker build -t test-${{ matrix.container }} ./${{ matrix.container }}
+          
+          echo "Running custom tests for ${{ matrix.container }}..."
+
+          if [ -f "./${{ matrix.container }}/test.sh" ]; then
+            chmod +x ./${{ matrix.container }}/test.sh
+            ./${{ matrix.container }}/test.sh test-${{ matrix.container }}
+          else
+            echo "No custom test script found for ${{ matrix.container }}. Performing basic sanity check."
+            docker run --rm test-${{ matrix.container }} /bin/true
+          fi
