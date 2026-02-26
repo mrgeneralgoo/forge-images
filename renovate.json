@@ -5,6 +5,8 @@
   ],
   "automerge": true,
   "platformAutomerge": true,
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
   "packageRules": [
     {
       "matchDatasources": ["docker"],
