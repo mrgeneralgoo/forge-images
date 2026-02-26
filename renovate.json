@@ -1,22 +1,39 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:base"
+    "config:recommended",
+    "docker:enableMajor",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigests"
   ],
-  "automerge": true,
+  "timezone": "Asia/Shanghai",
+  "labels": [
+    "dependencies"
+  ],
   "platformAutomerge": true,
-  "automergeType": "pr",
-  "automergeStrategy": "squash",
+  "dependencyDashboard": true,
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 0,
   "packageRules": [
     {
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["serversideup/php"],
-      "pinDigests": true
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    },
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false
     }
-  ],
-  "docker": {
-    "enabled": true,
-    "pinDigests": true
-  },
-  "timezone": "Asia/Shanghai"
+  ]
 }
