@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf
 
 # python3 + build-essential: @tobilu/qmd 的 tree-sitter 原生模块编译
 # git: vault 自动 commit/pull/push
