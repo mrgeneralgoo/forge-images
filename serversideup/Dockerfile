@@ -1,4 +1,4 @@
-FROM serversideup/php:8.5-frankenphp@sha256:af741f32b06bea7b496ec050fd72abb6e652db962cc3bab3717ec5458b50c79c
+FROM serversideup/php:8.5-frankenphp@sha256:9223cffd4ff56072ed5adb94ae2ae1eae15e9b70397bfdb98d8fa2d928d327d9
 
 USER root
 
