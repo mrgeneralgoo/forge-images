@@ -14,17 +14,6 @@
   "dependencyDashboard": true,
   "prHourlyLimit": 0,
   "prConcurrentLimit": 0,
-  "customManagers": [
-    {
-      "customType": "regex",
-      "fileMatch": [
-        "(^|/)Dockerfile$"
-      ],
-      "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+RUN\\s+npm\\s+install\\s+-g\\s+\\k<depName>@(?<currentValue>[\\w.\\-]+)"
-      ]
-    }
-  ],
   "packageRules": [
     {
       "matchUpdateTypes": [
