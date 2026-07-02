@@ -3,11 +3,10 @@ FROM python:3.14-slim@sha256:b877e50bd90de10af8d82c57a022fc2e0dc731c5320d762a279
 # Fava + fava-dashboards served by gunicorn. See fava_wsgi.py for why gunicorn
 # (multi-process → real multi-core for the CPU-bound BQL queries dashboards
 # fire) rather than the thread-based `fava` CLI.
-RUN pip install --no-cache-dir \
-      "fava>=1.27" \
-      "beancount>=3.0" \
-      "fava-dashboards>=2.0.0b6" \
-      "gunicorn>=21.2"
+# Versions are pinned in requirements.txt; Renovate opens bump PRs (CI
+# smoke-tests each before auto-merge), which retrigger the publish workflow.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Baked, importable WSGI entrypoint: --preload copy-on-write ledger sharing,
 # a BQL parse cache, and URL-prefix handling. Lives outside /data so a mounted

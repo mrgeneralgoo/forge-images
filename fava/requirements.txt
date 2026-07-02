@@ -1,0 +1,8 @@
+# Direct dependencies, pinned for reproducible builds.
+# Renovate (pip_requirements manager) opens bump PRs when new versions ship;
+# CI smoke-tests each PR, minor/patch auto-merge, and the merge to fava/**
+# retriggers the publish workflow. Transitive deps resolve at build time.
+fava==1.30.14
+beancount==3.2.3
+fava-dashboards==2.0.1
+gunicorn==26.0.0
