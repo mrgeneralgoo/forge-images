@@ -5,6 +5,7 @@ on:
     paths:
       - '**/Dockerfile'
       - '**/requirements.txt'
+      - '.github/workflows/**'
 
 jobs:
   validate:
