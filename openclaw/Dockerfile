@@ -1,4 +1,4 @@
-FROM ghcr.io/openclaw/openclaw:latest@sha256:99546785a121ccac065263d4b609c3dc08a396d260b20c837722e7998be0a6ee
+FROM ghcr.io/openclaw/openclaw:latest@sha256:25f5bacf51742c3231d7dd1d319fede009a9d5aeab8b6232cd309ac6475fe82c
 
 # Skill / agent dependencies layered on top of the upstream openclaw image.
 # Each tool gets its own RUN line + renovate annotation so renovate can pin
