@@ -1,0 +1,7 @@
+# /etc/crontabs/root (busybox crond)
+# Rules refresh daily, GeoData weekly. Jitter (<=15m) is applied inside
+# run-job.sh, since busybox crond has no RandomizedDelaySec.
+#
+# min hour dom mon dow  command
+17 4 * * *  /usr/local/bin/run-job.sh rules
+7 4 * * 1   /usr/local/bin/run-job.sh geo
