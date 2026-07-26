@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        container: [serversideup, pkm-mcp, openclaw, fava]
+        container: [serversideup, pkm-mcp, openclaw, fava, dae]
     
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
