@@ -10,7 +10,7 @@
 # Both paths are overridable via DAE_RUNTIME / DAE_RULE_MANIFEST.
 #
 # The FROM digest is pinned; Renovate opens bump PRs.
-FROM daeuniverse/dae:latest@sha256:052e4e685ad01e25a68524d45ae23fd5eaf33e3e3681c51074c98801af7ca94a
+FROM daeuniverse/dae:latest@sha256:e9c8bf973e0f2a746503efa654248f2c4edc00d9fc3c3b33829a9c732d93bb37
 
 # The base image ships only busybox sh + wget; add the updater toolchain.
 RUN apk add --no-cache curl python3 tini coreutils
