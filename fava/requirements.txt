@@ -4,5 +4,5 @@
 # retriggers the publish workflow. Transitive deps resolve at build time.
 fava==1.30.14
 beancount==3.2.3
-fava-dashboards==2.0.1
+fava-dashboards==2.0.2
 gunicorn==26.0.0
