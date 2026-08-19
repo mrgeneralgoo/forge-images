@@ -5,4 +5,4 @@
 fava==1.30.16
 beancount==3.2.3
 fava-dashboards==2.0.2
-gunicorn==26.0.0
+gunicorn==26.1.0
