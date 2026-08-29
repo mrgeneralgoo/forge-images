@@ -132,7 +132,7 @@ jobs:
           jq -e '.spdxVersion | startswith("SPDX-")' sbom.spdx.json
 
       - name: Attest SPDX SBOM on canonical registry
-        uses: actions/attest-sbom@51e74621a501c89df81fc1391c5a8f4cfc9fab2f # v4
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4
         with:
           subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ steps.resolve.outputs.image_digest }}
