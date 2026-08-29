@@ -134,7 +134,8 @@ for sha in \
 done
 
 for text in \
-  'FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a' \
+  'FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS go-distribution' \
+  'COPY --from=go-distribution /usr/local/go/ /usr/local/go/' \
   'FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537' \
   'FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
   'Binary distribution: golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
@@ -150,6 +151,8 @@ for text in \
   'org.opencontainers.image.licenses="Apache-2.0 AND BSD-3-Clause AND GPL-3.0-only AND MIT"'; do
   grep -F "$text" "$dockerfile" >/dev/null
 done
+
+grep -Eq '^FROM debian:trixie-slim@sha256:[0-9a-f]{64}$' "$dockerfile"
 
 for key in \
   STORMLIB_VERSION STORMLIB_COMMIT STORMLIB_ARCHIVE_SHA256 \
@@ -309,6 +312,18 @@ export DEBIAN_FRONTEND=noninteractive
 go version | grep -F "go$EXPECTED_GO_VERSION linux/amd64"
 sqlc version | grep -F "$EXPECTED_SQLC_VERSION"
 golangci-lint --version | grep -F "${EXPECTED_GOLANGCI_VERSION#v}"
+git --version
+test -s /etc/ssl/certs/ca-certificates.crt
+
+for package in ca-certificates gcc git libc6-dev libbz2-dev zlib1g-dev; do
+  dpkg-query -W "$package" >/dev/null
+ done
+for package in cmake curl g++ gnupg make mercurial openssh-client pkg-config python3 subversion wget; do
+  if dpkg-query -W "$package" >/dev/null 2>&1; then
+    echo "unexpected package in slim build environment: $package" >&2
+    exit 1
+  fi
+done
 
 for file in /usr/share/doc/go/LICENSE \
             /usr/share/doc/go/PATENTS \
@@ -365,13 +380,135 @@ test -s /usr/local/include/StormLib.h
 ldd /usr/local/lib/libstorm.so
 grep -F "STORMLIB_VERSION_STRING         \"$EXPECTED_STORMLIB_VERSION\"" \
   /usr/local/include/StormLib.h
-cat >/tmp/storm-smoke.c <<'EOF'
-#include <StormLib.h>
-int main(void) { return STORMLIB_VERSION_STRING[0] == '9' ? 0 : 1; }
+smoke_root=$(mktemp -d)
+mkdir "$smoke_root/storm"
+cat > "$smoke_root/storm/go.mod" <<'EOF'
+module smoke.invalid/storm
+
+go 1.27
 EOF
-gcc -Wall -Werror /tmp/storm-smoke.c -I/usr/local/include -L/usr/local/lib \
-  -Wl,-rpath,/usr/local/lib -lstorm -o /tmp/storm-smoke
-/tmp/storm-smoke
+cat > "$smoke_root/storm/main.go" <<'EOF'
+package main
+
+/*
+#cgo CFLAGS: -I/usr/local/include
+#cgo LDFLAGS: -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lstorm
+#include <StormLib.h>
+static const char *stormVersion(void) { return STORMLIB_VERSION_STRING; }
+*/
+import "C"
+
+func main() {
+	if C.GoString(C.stormVersion())[0] != '9' {
+		panic("unexpected StormLib version")
+	}
+}
+EOF
+(
+  cd "$smoke_root/storm"
+  CGO_ENABLED=1 go build -o storm-smoke .
+  ./storm-smoke
+)
+
+mkdir "$smoke_root/proxy"
+cat > "$smoke_root/proxy/main.go" <<'EOF'
+package main
+
+import (
+	"net"
+	"net/http"
+	"os"
+)
+
+func main() {
+	listener, err := net.Listen("tcp", "127.0.0.1:18080")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile("/tmp/proxy-ready", []byte("ready"), 0o600); err != nil {
+		panic(err)
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := os.WriteFile("/tmp/proxy-hit", []byte(r.URL.Path), 0o600); err != nil {
+			panic(err)
+		}
+		http.Error(w, "intentional proxy failure", http.StatusInternalServerError)
+	})
+	if err := http.Serve(listener, handler); err != nil {
+		panic(err)
+	}
+}
+EOF
+go build -o "$smoke_root/failing-proxy" "$smoke_root/proxy/main.go"
+"$smoke_root/failing-proxy" &
+proxy_pid=$!
+trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 1 100); do
+  test ! -e /tmp/proxy-ready || break
+  sleep 0.05
+done
+test -e /tmp/proxy-ready
+
+mkdir "$smoke_root/direct-source"
+(
+  cd "$smoke_root/direct-source"
+  git init -q
+  git config user.name test
+  git config user.email test@example.invalid
+  printf 'module example.invalid/direct.git\n\ngo 1.27\n' > go.mod
+  printf 'package direct\nconst Value = 1\n' > direct.go
+  git add go.mod direct.go
+  git commit -qm init
+  git tag v0.0.1
+)
+git clone -q --bare "$smoke_root/direct-source" "$smoke_root/direct.git"
+git config --global url."file://$smoke_root/direct.git".insteadOf \
+  https://example.invalid/direct
+mkdir "$smoke_root/direct-client" "$smoke_root/modcache" "$smoke_root/gocache"
+cat > "$smoke_root/direct-client/go.mod" <<'EOF'
+module client.invalid/test
+
+go 1.27
+
+require example.invalid/direct.git v0.0.1
+EOF
+cat > "$smoke_root/direct-client/main.go" <<'EOF'
+package main
+
+import "example.invalid/direct.git"
+
+func main() {
+	if direct.Value != 1 {
+		panic("unexpected direct module value")
+	}
+}
+EOF
+test -z "$(find "$smoke_root/modcache" -mindepth 1 -print -quit)"
+test -z "$(find "$smoke_root/gocache" -mindepth 1 -print -quit)"
+(
+  cd "$smoke_root/direct-client"
+  GOPROXY='http://127.0.0.1:18080|direct' \
+  GONOPROXY=none \
+  GONOSUMDB='example.invalid/*' \
+  GOMODCACHE="$smoke_root/modcache" \
+  GOCACHE="$smoke_root/gocache" \
+    go mod download
+  GOPROXY='http://127.0.0.1:18080|direct' \
+  GONOPROXY=none \
+  GONOSUMDB='example.invalid/*' \
+  GOMODCACHE="$smoke_root/modcache" \
+  GOCACHE="$smoke_root/gocache" \
+    go build -o direct-smoke .
+  ./direct-smoke
+)
+test -s /tmp/proxy-hit
+test -s "$smoke_root/modcache/cache/download/example.invalid/direct.git/@v/v0.0.1.zip"
+test -n "$(find "$smoke_root/gocache" -mindepth 1 -print -quit)"
+kill "$proxy_pid"
+wait "$proxy_pid" 2>/dev/null || true
+trap - EXIT
+rm -f /tmp/proxy-ready /tmp/proxy-hit
+rm -rf "$smoke_root"
 
 for path in /tmp/upstream /tmp/metadata /tmp/go.tar.gz /tmp/sqlc.tar.gz \
             /tmp/golangci-lint.tar.gz /tmp/stormlib.tar.gz /tmp/stormlib \
