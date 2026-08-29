@@ -10,7 +10,7 @@
   "labels": [
     "dependencies"
   ],
-  "platformAutomerge": true,
+  "platformAutomerge": false,
   "dependencyDashboard": true,
   "prHourlyLimit": 0,
   "prConcurrentLimit": 0,
@@ -84,9 +84,6 @@
         "wordpress",
         "library/wordpress",
         "ghcr.io/mrgeneralgoo/frankenphp"
-      ],
-      "matchUpdateTypes": [
-        "major"
       ],
       "automerge": false
     }

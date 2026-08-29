@@ -14,8 +14,83 @@ on:
       - 'LICENSE'
       - 'NOTICE.md'
       - '.github/vulnerability-policy.md'
+      - 'renovate.json'
 
 jobs:
+  repository-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate Renovate merge policy
+        run: |
+          set -eu
+          # shellcheck disable=SC2016
+          policy='
+            def protected_packages: [
+              "golang",
+              "sqlc/sqlc",
+              "golangci/golangci-lint",
+              "wordpress",
+              "library/wordpress",
+              "ghcr.io/mrgeneralgoo/frankenphp"
+            ];
+            . as $config |
+            ($config.packageRules[-1] // {}) as $guard |
+            $config.platformAutomerge == false and
+            $guard.automerge == false and
+            $guard.matchManagers == ["dockerfile"] and
+            (([$guard | keys[]] -
+              ["automerge", "matchManagers", "matchPackageNames"]) | length == 0) and
+            ((protected_packages | sort) == (($guard.matchPackageNames // []) | sort))
+          '
+
+          check_policy() {
+            jq -e "$policy" "$1" >/dev/null
+          }
+          reject_policy() {
+            if check_policy "$1"; then
+              echo "Renovate policy contract accepted invalid fixture: $2" >&2
+              exit 1
+            fi
+          }
+
+          check_policy renovate.json
+
+          fixtures=$(mktemp -d)
+          trap 'rm -rf "$fixtures"' EXIT
+
+          jq '
+            .packageRules |= (
+              map(select((.matchPackageNames // []) | index("sqlc/sqlc"))) +
+              map(select(((.matchPackageNames // []) | index("sqlc/sqlc")) | not))
+            )
+          ' renovate.json > "$fixtures/reordered.json"
+          reject_policy "$fixtures/reordered.json" "protected rule before automerge rule"
+
+          jq '
+            .packageRules |= map(
+              if ((.matchPackageNames // []) | index("sqlc/sqlc"))
+              then .matchManagers = ["npm"]
+              else .
+              end
+            )
+          ' renovate.json > "$fixtures/wrong-manager.json"
+          reject_policy "$fixtures/wrong-manager.json" "protected rule with wrong manager"
+
+          jq '
+            .packageRules += [{
+              "matchManagers": ["dockerfile"],
+              "matchPackageNames": ["sqlc/sqlc"],
+              "automerge": true
+            }]
+          ' renovate.json > "$fixtures/later-automerge.json"
+          reject_policy "$fixtures/later-automerge.json" "later rule re-enabling automerge"
+
+          jq '
+            .packageRules[-1].excludePackageNames = ["sqlc/sqlc"]
+          ' renovate.json > "$fixtures/excluded-package.json"
+          reject_policy "$fixtures/excluded-package.json" "protected rule excluding a protected package"
+
   secret-scan:
     runs-on: ubuntu-latest
     permissions:
