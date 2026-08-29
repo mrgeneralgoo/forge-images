@@ -13,6 +13,7 @@ workflow=$script_dir/../.github/workflows/wordpress-frankenphp.yml
 
 for text in \
   'BUILD_DIGEST: ${{ steps.build.outputs.digest }}' \
+  'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
   'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
   'if (.manifests? | type) == "array" then' \
   '.platform.os? == $os' \
@@ -29,6 +30,10 @@ for text in \
 done
 if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.build\.outputs\.digest' "$workflow"; then
   echo "scan or attestation still uses the BuildKit index digest" >&2
+  exit 1
+fi
+if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
+  echo "build step has multiple registry exporters with different output digests" >&2
   exit 1
 fi
 if grep -Eq '^[[:space:]]+DIGEST:' "$workflow"; then
@@ -49,6 +54,8 @@ assert_next_step() {
 }
 assert_next_step 'Build amd64 and push by digest' 'Resolve canonical amd64 image manifest digest'
 assert_next_step 'Build arm64 and push by digest' 'Resolve canonical arm64 image manifest digest'
+assert_next_step 'Attest amd64 build provenance on canonical registry' 'Mirror scanned amd64 image to Docker Hub staging'
+assert_next_step 'Attest arm64 build provenance on canonical registry' 'Mirror scanned arm64 image to Docker Hub staging'
 
 final_index_workflow=$(awk '/^  publish-index:/{found=1} found {print}' "$workflow")
 for text in \
@@ -92,6 +99,10 @@ step_contains 'Extract attached amd64 SPDX SBOM' 'BUILD_DIGEST: ${{ steps.build.
 step_contains 'Extract attached amd64 SPDX SBOM' '"$GHCR_IMAGE@$BUILD_DIGEST"'
 step_contains 'Attest amd64 SPDX SBOM on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
 step_contains 'Attest amd64 build provenance on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
+step_contains 'Mirror scanned amd64 image to Docker Hub staging' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
+step_contains 'Mirror scanned amd64 image to Docker Hub staging' '--tag "$DOCKERHUB_IMAGE:$staging_tag"'
+step_contains 'Mirror scanned amd64 image to Docker Hub staging' '--prefer-index=false'
+step_contains 'Mirror scanned amd64 image to Docker Hub staging' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
 step_contains 'Sign amd64 digest' 'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"'
 step_contains 'Sign amd64 digest' 'cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
 step_contains 'Build arm64 and push by digest' 'platforms: linux/arm64'
@@ -101,6 +112,10 @@ step_contains 'Extract attached arm64 SPDX SBOM' 'BUILD_DIGEST: ${{ steps.build.
 step_contains 'Extract attached arm64 SPDX SBOM' '"$GHCR_IMAGE@$BUILD_DIGEST"'
 step_contains 'Attest arm64 SPDX SBOM on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
 step_contains 'Attest arm64 build provenance on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
+step_contains 'Mirror scanned arm64 image to Docker Hub staging' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
+step_contains 'Mirror scanned arm64 image to Docker Hub staging' '--tag "$DOCKERHUB_IMAGE:$staging_tag"'
+step_contains 'Mirror scanned arm64 image to Docker Hub staging' '--prefer-index=false'
+step_contains 'Mirror scanned arm64 image to Docker Hub staging' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
 step_contains 'Sign arm64 digest' 'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"'
 step_contains 'Sign arm64 digest' 'cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
 

@@ -13,6 +13,7 @@ workflow=$script_dir/../.github/workflows/mapservice-build.yml
 
 for text in \
   'BUILD_DIGEST: ${{ steps.build.outputs.digest }}' \
+  'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
   'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
   'if (.manifests? | type) == "array" then' \
   '.platform.os? == $os' \
@@ -30,6 +31,10 @@ if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.b
   echo "scan or attestation still uses the BuildKit index digest" >&2
   exit 1
 fi
+if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
+  echo "build step has multiple registry exporters with different output digests" >&2
+  exit 1
+fi
 if grep -Eq '^[[:space:]]+DIGEST:' "$workflow"; then
   echo "workflow uses the ambiguous DIGEST variable" >&2
   exit 1
@@ -43,6 +48,7 @@ assert_next_step() {
   ' "$workflow"
 }
 assert_next_step 'Build and push canonical image by digest' 'Resolve canonical platform image manifest digest'
+assert_next_step 'Attest build provenance on canonical registry' 'Mirror scanned image to Docker Hub staging'
 step_contains() {
   local step=$1 needle=$2
   awk -v step="$step" -v needle="$needle" '
@@ -58,13 +64,19 @@ step_contains 'Extract attached SPDX SBOM' '"$GHCR_IMAGE@$BUILD_DIGEST"'
 step_contains 'Extract attached SPDX SBOM' "--format '{{json .SBOM.SPDX}}'"
 step_contains 'Attest SPDX SBOM on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
 step_contains 'Attest build provenance on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
+step_contains 'Mirror scanned image to Docker Hub staging' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
+step_contains 'Mirror scanned image to Docker Hub staging' '--tag "$DOCKERHUB_IMAGE:$staging_tag"'
+step_contains 'Mirror scanned image to Docker Hub staging' '--prefer-index=false'
+step_contains 'Mirror scanned image to Docker Hub staging' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
 step_contains 'Sign canonical and mirror digests' 'IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}'
 step_contains 'Sign canonical and mirror digests' 'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"'
 step_contains 'Sign canonical and mirror digests' 'cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
 step_contains 'Create immutable release references' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
+step_contains 'Create immutable release references' '--prefer-index=false'
 step_contains 'Create immutable release references' 'test "$release_digest" = "$IMAGE_DIGEST"'
 step_contains 'Create immutable release references' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
 step_contains 'Update mutable latest references after scan and signing' '"$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
+step_contains 'Update mutable latest references after scan and signing' '--prefer-index=false'
 
 pin() {
   awk -v key="$1" '$1 == "ARG" && index($2, key "=") == 1 { sub("^[^=]+=", "", $2); print $2; exit }' "$dockerfile"

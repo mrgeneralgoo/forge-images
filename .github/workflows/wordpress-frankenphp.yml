@@ -49,9 +49,7 @@ jobs:
           file: ./wordpress-frankenphp/Dockerfile
           platforms: linux/amd64
           build-args: VCS_REF=${{ github.sha }}
-          outputs: |
-            type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=wordpress-frankenphp-amd64
@@ -142,6 +140,21 @@ jobs:
           subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ steps.resolve.outputs.image_digest }}
           push-to-registry: true
+      - name: Mirror scanned amd64 image to Docker Hub staging
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          set -Eeuo pipefail
+          staging_tag="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}-amd64"
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$DOCKERHUB_IMAGE:$staging_tag" \
+            "$GHCR_IMAGE@$IMAGE_DIGEST"
+          mirror_digest=$(docker buildx imagetools inspect \
+            "$DOCKERHUB_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          test "$mirror_digest" = "$IMAGE_DIGEST"
+
       - uses: sigstore/cosign-installer@874852de93c66509b01dc7cd80f7a5385182d017 # pinned commit
       - name: Sign amd64 digest
         env:
@@ -176,9 +189,7 @@ jobs:
           file: ./wordpress-frankenphp/Dockerfile
           platforms: linux/arm64
           build-args: VCS_REF=${{ github.sha }}
-          outputs: |
-            type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=wordpress-frankenphp-arm64
@@ -269,6 +280,21 @@ jobs:
           subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ steps.resolve.outputs.image_digest }}
           push-to-registry: true
+      - name: Mirror scanned arm64 image to Docker Hub staging
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          set -Eeuo pipefail
+          staging_tag="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}-arm64"
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$DOCKERHUB_IMAGE:$staging_tag" \
+            "$GHCR_IMAGE@$IMAGE_DIGEST"
+          mirror_digest=$(docker buildx imagetools inspect \
+            "$DOCKERHUB_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          test "$mirror_digest" = "$IMAGE_DIGEST"
+
       - uses: sigstore/cosign-installer@874852de93c66509b01dc7cd80f7a5385182d017 # pinned commit
       - name: Sign arm64 digest
         env:
