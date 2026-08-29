@@ -142,7 +142,7 @@ jobs:
           push-to-registry: true
 
       - name: Attest build provenance on canonical registry
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ${{ env.GHCR_IMAGE }}
           subject-digest: ${{ steps.resolve.outputs.image_digest }}
