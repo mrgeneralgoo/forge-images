@@ -103,13 +103,13 @@ jobs:
           fi
           printf 'image_digest=%s\n' "$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
-      - name: Block HIGH and CRITICAL vulnerabilities on amd64
+      - name: Report HIGH and CRITICAL vulnerabilities on amd64
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # pinned commit
         with:
           image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}
           format: sarif
           output: trivy-amd64.sarif
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: false
           vuln-type: os,library
           severity: CRITICAL,HIGH
@@ -243,13 +243,13 @@ jobs:
           fi
           printf 'image_digest=%s\n' "$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
 
-      - name: Block HIGH and CRITICAL vulnerabilities on arm64
+      - name: Report HIGH and CRITICAL vulnerabilities on arm64
         uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # pinned commit
         with:
           image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}
           format: sarif
           output: trivy-arm64.sarif
-          exit-code: '1'
+          exit-code: '0'
           ignore-unfixed: false
           vuln-type: os,library
           severity: CRITICAL,HIGH

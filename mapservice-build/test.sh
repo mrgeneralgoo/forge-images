@@ -12,6 +12,7 @@ dockerfile=$script_dir/Dockerfile
 workflow=$script_dir/../.github/workflows/mapservice-build.yml
 
 for text in \
+  'security-events: write' \
   'BUILD_DIGEST: ${{ steps.build.outputs.digest }}' \
   'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
   'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
@@ -29,6 +30,14 @@ for text in \
 done
 if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.build\.outputs\.digest' "$workflow"; then
   echo "scan or attestation still uses the BuildKit index digest" >&2
+  exit 1
+fi
+if grep -Fq "exit-code: '1'" "$workflow"; then
+  echo "Trivy vulnerability findings still block publication" >&2
+  exit 1
+fi
+if grep -Eq '^[[:space:]]*continue-on-error:|[|][|][[:space:]]*true' "$workflow"; then
+  echo "workflow suppresses operational failures" >&2
   exit 1
 fi
 if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
@@ -58,7 +67,17 @@ step_contains() {
     END { if (!found) exit 1 }
   ' "$workflow"
 }
-step_contains 'Block HIGH and CRITICAL vulnerabilities' 'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'format: sarif'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'output: trivy-results.sarif'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' "exit-code: '0'"
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'ignore-unfixed: false'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'vuln-type: os,library'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'severity: CRITICAL,HIGH'
+step_contains 'Report HIGH and CRITICAL vulnerabilities' 'scanners: vuln'
+step_contains 'Upload vulnerability results' 'github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938'
+step_contains 'Upload vulnerability results' 'sarif_file: trivy-results.sarif'
 step_contains 'Extract attached SPDX SBOM' 'BUILD_DIGEST: ${{ steps.build.outputs.digest }}'
 step_contains 'Extract attached SPDX SBOM' '"$GHCR_IMAGE@$BUILD_DIGEST"'
 step_contains 'Extract attached SPDX SBOM' "--format '{{json .SBOM.SPDX}}'"

@@ -29,12 +29,19 @@ Architecture support and publication destinations are defined per image below; t
 ### Pull and verify an immutable image
 
 GHCR is the attested canonical registry. Each platform is built once into
-GHCR, scanned and attested there, then copied by immutable image-manifest digest
-to a non-release Docker Hub staging tag. The workflow verifies the copied digest
-before signing both registries. Multi-architecture publication then creates an
-identical non-release staging index in both registries, attests the GHCR index,
-and signs both immutable index digests. Only after those gates are complete are
-`sha-` references created; `latest` is created only on `main`.
+GHCR and scanned by immutable image-manifest digest. Trivy remains enabled for
+OS and library `HIGH`/`CRITICAL` findings, including unfixed findings, and
+uploads SARIF to GitHub code scanning. Vulnerability findings are informational
+and do not block image publication. Scanner, action, or vulnerability-database
+operational failures remain fatal.
+
+After reporting, each platform is attested and copied by immutable
+image-manifest digest to a non-release Docker Hub staging tag. The workflow
+verifies the copied digest before signing both registries. Multi-architecture
+publication then creates an identical non-release staging index in both
+registries, attests the GHCR index, and signs both immutable index digests. Only
+after those gates are complete are `sha-` references created; `latest` is
+created only on `main`.
 
 The top-level multi-architecture index does not have an SPDX attestation.
 BuildKit produces per-platform SBOMs. The GitHub per-platform SBOM and

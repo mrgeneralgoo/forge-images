@@ -14,6 +14,7 @@ on:
       - 'LICENSE'
       - 'NOTICE.md'
       - '.github/vulnerability-policy.md'
+      - 'README.md'
       - 'renovate.json'
 
 jobs:
@@ -90,6 +91,24 @@ jobs:
             .packageRules[-1].excludePackageNames = ["sqlc/sqlc"]
           ' renovate.json > "$fixtures/excluded-package.json"
           reject_policy "$fixtures/excluded-package.json" "protected rule excluding a protected package"
+
+      - name: Validate vulnerability documentation policy
+        run: |
+          set -eu
+          documents=(README.md .github/vulnerability-policy.md)
+          for document in "${documents[@]}"; do
+            grep -F 'Trivy remains enabled' "$document" >/dev/null
+            grep -F 'Vulnerability findings are informational' "$document" >/dev/null
+            grep -F 'do not block image publication' "$document" >/dev/null
+            grep -F 'operational failures remain fatal' "$document" >/dev/null
+          done
+
+          private_repo_ref=$(printf '%s/%s%s' mrgeneralgoo moshou ditu)
+          if grep -Eiq 'HIGH/CRITICAL findings block publication|only a clean scan may proceed|Trivy (is|has been|was) removed' "${documents[@]}" ||
+             grep -Fqi "$private_repo_ref" "${documents[@]}"; then
+            echo 'vulnerability documentation violates the public policy contract' >&2
+            exit 1
+          fi
 
   secret-scan:
     runs-on: ubuntu-latest
