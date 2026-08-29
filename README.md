@@ -17,12 +17,12 @@ Architecture support and publication destinations are defined per image below; t
 | **openclaw** | `linux/amd64, linux/arm64` | `ghcr.io/mrgeneralgoo/openclaw` · `mrgeneralgoo/openclaw` | Skill/agent tooling layered on the upstream `openclaw` image, each tool pinned and bumped independently by Renovate. |
 | **frankenphp** | `linux/amd64, linux/arm64` | `ghcr.io/mrgeneralgoo/frankenphp` · `mrgeneralgoo/frankenphp` | serversideup PHP 8.5 (FrankenPHP) with a curated set of PHP extensions (redis, imagick, gd, intl, bcmath, …). |
 | **dae** | `linux/amd64, linux/arm64` | `ghcr.io/mrgeneralgoo/dae` · `mrgeneralgoo/dae` | [dae](https://github.com/daeuniverse/dae) (eBPF transparent proxy) on the pinned upstream image plus a self-contained in-container rule/GeoData auto-update loop (busybox crond + local `dae reload`). Runtime-specific config and the rule-source manifest are bind-mounted, never baked. |
-| **mapservice-build** | `linux/amd64` | `ghcr.io/mrgeneralgoo/mapservice-build` · `mrgeneralgoo/mapservice-build` | Go build environment with source-built StormLib, sqlc, and golangci-lint; no application source is copied. |
+| **mapservice-build** | `linux/amd64` | `ghcr.io/mrgeneralgoo/mapservice-build` · `mrgeneralgoo/mapservice-build` | Minimal Debian Go build environment with Git/CA/CGO support, source-built StormLib, sqlc, and golangci-lint; no application source is copied. |
 | **wordpress-frankenphp** | `linux/amd64, linux/arm64` | `ghcr.io/mrgeneralgoo/wordpress-frankenphp` · `mrgeneralgoo/wordpress-frankenphp` | Official WordPress core in the pinned FrankenPHP runtime; uploads and cache are empty runtime volumes, and no local `wp-content` is copied. |
 
 ### Image boundaries and runtime inputs
 
-- `mapservice-build` contains the pinned Go/tool binaries, StormLib headers/library, and dependency notices/provenance only; it does not contain application source.
+- `mapservice-build` copies Go from the pinned official distribution into a minimal Debian stage with only Git, CA certificates, and the CGO compiler/header path; it also contains pinned sqlc/golangci-lint, StormLib headers/library, and dependency notices/provenance, but no application source.
 - `wordpress-frankenphp` copies only the official WordPress core tree into `/var/www/html/public`; `uploads` and `cache` are empty writable volumes.
 - Runtime secrets are supplied only through environment variables or Docker/BuildKit secret mounts. They are never baked into an image layer or build context.
 
@@ -183,7 +183,7 @@ Dependencies are **pinned for reproducibility** and kept current automatically:
 
 - **Base images & GitHub Actions** are digest-pinned; [Renovate](https://docs.renovatebot.com/) (`docker:pinDigests`, `helpers:pinGitHubActionDigests`) opens bump PRs.
 - **Language deps** are pinned in each image's manifest (e.g. `fava/requirements.txt`) and tracked by Renovate's native managers.
-- Every PR is **smoke-tested in CI** (`.github/workflows/ci.yml` runs each image's `test.sh`); digest updates may auto-merge after checks, while Go/tool/WordPress major updates and StormLib tag updates wait for review.
+- Every PR is **smoke-tested in CI** (`.github/workflows/ci.yml` runs each image's `test.sh`); ordinary one-pin updates may auto-merge after checks, while synchronized Go/tool/WordPress and StormLib updates wait for review.
 - A merge under an image's directory **retriggers that image's publish workflow** — so a rebuild happens only when something actually changed.
 
 ---

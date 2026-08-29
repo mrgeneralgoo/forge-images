@@ -18,7 +18,9 @@ ARG GOLANGCI_ARCHIVE_SHA256=ef31ff6f9c278cbbf6e813c1d61eb683ee8a1f79050ce259d08a
 FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537 AS sqlc
 FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d AS golangci
 
-FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS upstream-source
+FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS go-distribution
+
+FROM go-distribution AS upstream-source
 ARG STORMLIB_VERSION
 ARG STORMLIB_COMMIT
 ARG STORMLIB_ARCHIVE_SHA256
@@ -122,7 +124,7 @@ RUN set -eux; \
       > /tmp/metadata/stormlib/PROVENANCE; \
     rm -f "${go_archive}" "${sqlc_archive}" "${stormlib_archive}"
 
-FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS stormlib-builder
+FROM go-distribution AS stormlib-builder
 
 COPY --from=upstream-source /tmp/upstream/stormlib /tmp/stormlib
 RUN set -eux; \
@@ -140,7 +142,7 @@ RUN set -eux; \
     cmake --install /tmp/stormlib-build; \
     test -s /opt/stormlib/lib/libstorm.so
 
-FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 ARG TARGETPLATFORM
 ARG VCS_REF=unknown
 ARG STORMLIB_VERSION
@@ -156,8 +158,26 @@ ARG GOLANGCI_VERSION
 ARG GOLANGCI_COMMIT
 ARG GOLANGCI_ARCHIVE_SHA256
 
-RUN test "$TARGETPLATFORM" = linux/amd64
+ENV PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    GOLANG_VERSION=${GO_VERSION} \
+    GOTOOLCHAIN=local \
+    GOPATH=/go
 
+RUN set -eux; \
+    test "$TARGETPLATFORM" = linux/amd64; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      gcc \
+      git \
+      libc6-dev \
+      libbz2-dev \
+      zlib1g-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p "$GOPATH/src" "$GOPATH/bin"; \
+    chmod -R 1777 "$GOPATH"
+
+COPY --from=go-distribution /usr/local/go/ /usr/local/go/
 COPY --from=sqlc /workspace/sqlc /usr/local/bin/sqlc
 COPY --from=golangci /usr/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=stormlib-builder /opt/stormlib/ /usr/local/
@@ -177,6 +197,8 @@ USER root
 RUN set -eux; \
     printf '/usr/local/lib\n' > /etc/ld.so.conf.d/stormlib.conf; \
     ldconfig
+
+WORKDIR /go
 
 LABEL org.opencontainers.image.title="Go and StormLib build environment" \
       org.opencontainers.image.description="Pinned Go build environment with source-built StormLib, sqlc, and golangci-lint." \
