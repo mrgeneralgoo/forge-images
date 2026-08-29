@@ -50,9 +50,7 @@ jobs:
           file: ./mapservice-build/Dockerfile
           platforms: linux/amd64
           build-args: VCS_REF=${{ github.sha }}
-          outputs: |
-            type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-            type=image,name=${{ env.DOCKERHUB_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           sbom: true
           provenance: mode=max
           cache-from: type=gha,scope=mapservice-build
@@ -148,6 +146,21 @@ jobs:
           subject-digest: ${{ steps.resolve.outputs.image_digest }}
           push-to-registry: true
 
+      - name: Mirror scanned image to Docker Hub staging
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          set -Eeuo pipefail
+          staging_tag="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}-amd64"
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$DOCKERHUB_IMAGE:$staging_tag" \
+            "$GHCR_IMAGE@$IMAGE_DIGEST"
+          mirror_digest=$(docker buildx imagetools inspect \
+            "$DOCKERHUB_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          test "$mirror_digest" = "$IMAGE_DIGEST"
+
       - name: Install keyless signing tool
         uses: sigstore/cosign-installer@874852de93c66509b01dc7cd80f7a5385182d017 # pinned commit
 
@@ -164,9 +177,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           docker buildx imagetools create \
+            --prefer-index=false \
             --tag "$GHCR_IMAGE:sha-$GITHUB_SHA" \
             "$GHCR_IMAGE@$IMAGE_DIGEST"
           docker buildx imagetools create \
+            --prefer-index=false \
             --tag "$DOCKERHUB_IMAGE:sha-$GITHUB_SHA" \
             "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
           release_digest=$(docker buildx imagetools inspect \
@@ -184,5 +199,5 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
         run: |
-          docker buildx imagetools create --tag "$GHCR_IMAGE:latest" "$GHCR_IMAGE@$IMAGE_DIGEST"
-          docker buildx imagetools create --tag "$DOCKERHUB_IMAGE:latest" "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
+          docker buildx imagetools create --prefer-index=false --tag "$GHCR_IMAGE:latest" "$GHCR_IMAGE@$IMAGE_DIGEST"
+          docker buildx imagetools create --prefer-index=false --tag "$DOCKERHUB_IMAGE:latest" "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
