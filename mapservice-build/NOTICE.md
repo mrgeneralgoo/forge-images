@@ -4,7 +4,7 @@ mapservice-build contains these directly distributed upstream components:
   pinned source provenance are in `/usr/share/doc/go/`.
 - sqlc 1.31.1, licensed under MIT. Its license and pinned source provenance
   are in `/usr/share/doc/sqlc/`.
-- golangci-lint v2.13.1, licensed under GPL-3.0. Its license and pinned source
+- golangci-lint v2.13.2, licensed under GPL-3.0. Its license and pinned source
   provenance are in `/usr/share/doc/golangci-lint/`; the exact upstream source
   archive for the pinned release is retained at
   `/usr/share/source/golangci-lint/source.tar.gz` as the corresponding-source

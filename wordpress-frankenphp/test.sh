@@ -176,10 +176,11 @@ JSON
 check_image_manifest_resolution
 
 for text in \
-  'FROM wordpress:7.1.0-php8.3-apache@sha256:8801a1239d7ba9fb340a5fc5ba0bf7f8d3652adbd64893e3fba7992ba618108e AS wordpress-core' \
+  'FROM wordpress:7.1.0-php8.3-apache@sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17 AS wordpress-core' \
   'FROM ghcr.io/mrgeneralgoo/frankenphp:latest@sha256:89d9081b847dbacfa081acd6d2a125de81e810402fb3a1bb9f8df62f0b25a1c1' \
   'COPY --from=wordpress-core /usr/src/wordpress/ /var/www/html/public/' \
   'COPY --from=wordpress-core /usr/src/wordpress/license.txt /usr/share/doc/wordpress/LICENSE' \
+  'io.forge-images.wordpress.source-digest="sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17"' \
   'VOLUME ["/var/www/html/public/wp-content/uploads", "/var/www/html/public/wp-content/cache"]'; do
   grep -F "$text" "$dockerfile" >/dev/null
 done
@@ -213,6 +214,9 @@ volumes=$(docker image inspect "$image" --format '{{range $path, $_ := .Config.V
 grep -Fx '/var/www/html/public/wp-content/uploads' <<<"$volumes" >/dev/null
 grep -Fx '/var/www/html/public/wp-content/cache' <<<"$volumes" >/dev/null
 
+source_digest=$(docker image inspect "$image" --format '{{ index .Config.Labels "io.forge-images.wordpress.source-digest" }}')
+test "$source_digest" = 'sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17'
+
 docker run --rm --entrypoint sh "$image" -s <<'CHECK'
 set -eu
 
@@ -223,7 +227,7 @@ test -f /var/www/html/public/wp-includes/version.php
 test -s /usr/share/doc/wordpress/LICENSE
 test -s /usr/share/doc/wordpress/PROVENANCE
 test -s /usr/share/doc/wordpress/NOTICE.md
-grep -F 'sha256:8801a1239d7ba9fb340a5fc5ba0bf7f8d3652adbd64893e3fba7992ba618108e' /usr/share/doc/wordpress/PROVENANCE
+grep -F 'sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17' /usr/share/doc/wordpress/PROVENANCE
 cmp -s /var/www/html/public/license.txt /usr/share/doc/wordpress/LICENSE
 
 test "$(id -u)" -eq 33

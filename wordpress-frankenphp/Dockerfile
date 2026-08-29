@@ -15,7 +15,7 @@ RUN set -eux; \
              /var/www/html/public/wp-content/cache; \
     printf '%s\n' \
       'Source image: wordpress:7.1.0-php8.3-apache' \
-      'Source digest: sha256:8801a1239d7ba9fb340a5fc5ba0bf7f8d3652adbd64893e3fba7992ba618108e' \
+      'Source digest: sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17' \
       'Source path: /usr/src/wordpress' \
       'Destination path: /var/www/html/public' \
       'License source: /usr/src/wordpress/license.txt' \
@@ -33,7 +33,7 @@ LABEL org.opencontainers.image.title="WordPress core on FrankenPHP" \
       org.opencontainers.image.version="7.1.0" \
       org.opencontainers.image.source="https://github.com/mrgeneralgoo/forge-images" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      io.forge-images.wordpress.source-digest="sha256:8801a1239d7ba9fb340a5fc5ba0bf7f8d3652adbd64893e3fba7992ba618108e" \
+      io.forge-images.wordpress.source-digest="sha256:5a93c470ae8220fddf71f6ebe3bc94e615ddc2ae4d9810f795b830fb11c41a17" \
       io.forge-images.frankenphp.source-digest="sha256:89d9081b847dbacfa081acd6d2a125de81e810402fb3a1bb9f8df62f0b25a1c1"
 
 USER www-data

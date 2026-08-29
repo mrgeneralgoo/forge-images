@@ -11,9 +11,9 @@ ARG SQLC_VERSION=1.31.1
 ARG SQLC_COMMIT=a95e91d70ad9e1181253c333a1cfdd75ae4b95a5
 ARG SQLC_ARCHIVE_SHA256=f0c87c96059123cb7fef9ae03f6fbb5185a830f7b78c64220b5f166d3ce51d70
 
-ARG GOLANGCI_VERSION=v2.13.1
-ARG GOLANGCI_COMMIT=6d2288e072e6f9c9bca28180cae9ce58a049c912
-ARG GOLANGCI_ARCHIVE_SHA256=e56a2401be1ee926317a3ae6123072b593bb89cd0a922178beb7ea7a27f3a059
+ARG GOLANGCI_VERSION=v2.13.2
+ARG GOLANGCI_COMMIT=27774aaf853a4fd21f1dd5e69439459dc1b26e68
+ARG GOLANGCI_ARCHIVE_SHA256=ef31ff6f9c278cbbf6e813c1d61eb683ee8a1f79050ce259d08a3b16b4d65642
 
 FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537 AS sqlc
 FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d AS golangci
@@ -108,7 +108,7 @@ RUN set -eux; \
       "Source commit: ${GOLANGCI_COMMIT}" \
       "Source archive SHA256: ${GOLANGCI_ARCHIVE_SHA256}" \
       'Corresponding source: /usr/share/source/golangci-lint/source.tar.gz' \
-      'Binary distribution: golangci/golangci-lint:v2.13.1@sha256:d371321370bf2907bd13a8f6f8baff0e0ca7438d76fdf636b281eadf7e2305e3' \
+      'Binary distribution: golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
       > /tmp/metadata/golangci-lint/PROVENANCE; \
     printf '%s\n' \
       'Name: StormLib' \

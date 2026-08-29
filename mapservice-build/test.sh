@@ -136,7 +136,8 @@ done
 for text in \
   'FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a' \
   'FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537' \
-  'FROM golangci/golangci-lint:v2.13.1@sha256:d371321370bf2907bd13a8f6f8baff0e0ca7438d76fdf636b281eadf7e2305e3' \
+  'FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
+  'Binary distribution: golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
   'AS upstream-source' \
   'COPY --from=upstream-source /tmp/upstream/go/LICENSE' \
   'COPY --from=upstream-source /tmp/metadata/go/PROVENANCE' \
@@ -352,6 +353,7 @@ grep -F "Source archive SHA256: $EXPECTED_STORMLIB_SHA" /usr/share/doc/stormlib/
 grep -F "License: BSD-3-Clause" /usr/share/doc/go/PROVENANCE
 grep -F "License: MIT" /usr/share/doc/sqlc/PROVENANCE
 grep -F "License: GPL-3.0" /usr/share/doc/golangci-lint/PROVENANCE
+grep -F "golangci-lint $EXPECTED_GOLANGCI_VERSION" /usr/share/doc/mapservice-build/NOTICE.md
 grep -F "License: MIT" /usr/share/doc/stormlib/PROVENANCE
 printf '%s  %s\n' "$EXPECTED_GOLANGCI_SHA" /usr/share/source/golangci-lint/source.tar.gz | sha256sum --check --status
 tar -tzf /usr/share/source/golangci-lint/source.tar.gz | grep -Eq '/LICENSE$'
