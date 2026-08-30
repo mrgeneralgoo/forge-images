@@ -24,8 +24,10 @@ docker.io/mrgeneralgoo/<image>
 
 ## Common publication contract
 
-Every pull request builds and smoke-tests each changed image for both supported
-architectures. Every main-branch publication:
+Every pull request queries changed files once, then creates native amd64 and
+arm64 build/smoke-test jobs only for affected images. Changes limited to tag
+reconciliation run policy and recovery fixtures without building images. Every
+main-branch publication:
 
 1. Builds each architecture once in GHCR by digest.
 2. Resolves the exact platform image manifest, excluding attestation manifests.
@@ -39,8 +41,9 @@ architectures. Every main-branch publication:
 
 Vulnerability findings are informational; scanner, registry, attestation, and
 signing operational failures remain fatal. Public tag updates use bounded
-retries plus an independent reconciliation workflow. It repairs each completed
-publication and periodically sweeps the full publication history, so partial
+retries. Successful promotion does not run duplicate repair work; failed or
+cancelled publication starts the independent reconciliation workflow. Manual
+recovery and scheduled full-history sweeps remain available, so partial
 cross-registry promotion can be recovered without rebuilding. See
 [`.github/vulnerability-policy.md`](.github/vulnerability-policy.md).
 
