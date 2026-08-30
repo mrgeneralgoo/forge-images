@@ -1,0 +1,370 @@
+name: Publish image
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Canonical image slug and directory name
+        required: true
+        type: string
+    secrets:
+      REGISTRY_USERNAME_DOCKER_HUB:
+        required: true
+      REGISTRY_PASSWORD_DOCKER_HUB:
+        required: true
+
+env:
+  GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ inputs.image }}
+  DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ inputs.image }}
+
+jobs:
+  build-platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Validate image slug
+        env:
+          IMAGE_SLUG: ${{ inputs.image }}
+        run: |
+          case "$IMAGE_SLUG" in
+            dae|fava|mapservice-build|wordpress-frankenphp) ;;
+            *) echo 'unsupported image slug' >&2; exit 2 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build platform and push canonical digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ./${{ inputs.image }}
+          file: ./${{ inputs.image }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: VCS_REF=${{ github.sha }}
+          outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha,scope=${{ inputs.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image }}-${{ matrix.arch }}
+
+      - name: Resolve canonical platform image manifest digest
+        id: resolve
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          TARGET_OS: linux
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -Eeuo pipefail
+          raw_manifest=$(mktemp)
+          trap 'rm -f "$raw_manifest"' EXIT
+          docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw > "$raw_manifest"
+          IMAGE_DIGEST="$(
+            jq -er \
+              --arg os "$TARGET_OS" \
+              --arg arch "$TARGET_ARCH" \
+              --arg build_digest "$BUILD_DIGEST" \
+              '
+                if (.manifests? | type) == "array" then
+                  [
+                    .manifests[]
+                    | select(
+                        .platform.os? == $os
+                        and .platform.architecture? == $arch
+                        and (
+                          .mediaType? == "application/vnd.oci.image.manifest.v1+json"
+                          or .mediaType? == "application/vnd.docker.distribution.manifest.v2+json"
+                        )
+                        and .annotations["vnd.docker.reference.type"]? != "attestation-manifest"
+                      )
+                  ]
+                  | if length == 1 then .[0].digest
+                    else error("expected exactly one platform image manifest")
+                    end
+                elif (
+                  .mediaType? == "application/vnd.oci.image.manifest.v1+json"
+                  or .mediaType? == "application/vnd.docker.distribution.manifest.v2+json"
+                ) then
+                  $build_digest
+                else
+                  error("expected an OCI index or image manifest")
+                end
+              ' "$raw_manifest"
+          )"
+          if ! [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "invalid image manifest digest" >&2
+            exit 1
+          fi
+          printf 'image_digest=%s\n' "$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Report HIGH and CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # pinned commit
+        with:
+          image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}
+          format: sarif
+          output: trivy-${{ matrix.arch }}.sarif
+          exit-code: '0'
+          ignore-unfixed: false
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          scanners: vuln
+
+      - name: Upload vulnerability results
+        if: always() && hashFiles(format('trivy-{0}.sarif', matrix.arch)) != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        with:
+          sarif_file: trivy-${{ matrix.arch }}.sarif
+          category: ${{ inputs.image }}-${{ matrix.arch }}
+
+      - name: Extract attached SPDX SBOM
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" \
+            --format '{{json .SBOM.SPDX}}' > "sbom-${{ matrix.arch }}.spdx.json"
+          jq -e '.spdxVersion | startswith("SPDX-")' "sbom-${{ matrix.arch }}.spdx.json"
+
+      - name: Attest SPDX SBOM on canonical registry
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.resolve.outputs.image_digest }}
+          sbom-path: sbom-${{ matrix.arch }}.spdx.json
+          push-to-registry: true
+
+      - name: Attest build provenance on canonical registry
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.resolve.outputs.image_digest }}
+          push-to-registry: true
+
+      - name: Mirror platform image to Docker Hub staging
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          set -Eeuo pipefail
+          staging_tag="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}-${{ matrix.arch }}"
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$DOCKERHUB_IMAGE:$staging_tag" \
+            "$GHCR_IMAGE@$IMAGE_DIGEST"
+          mirror_digest=$(docker buildx imagetools inspect \
+            "$DOCKERHUB_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          test "$mirror_digest" = "$IMAGE_DIGEST"
+
+      - uses: sigstore/cosign-installer@874852de93c66509b01dc7cd80f7a5385182d017 # pinned commit
+
+      - name: Sign canonical and mirror platform digests
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"
+          cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"
+
+      - name: Save validated platform digest
+        env:
+          IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}
+        run: |
+          mkdir -p /tmp/platform-digests
+          printf '%s\n' "$IMAGE_DIGEST" > "/tmp/platform-digests/${{ matrix.arch }}"
+
+      - name: Upload validated platform digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ inputs.image }}-${{ matrix.arch }}
+          path: /tmp/platform-digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-index:
+    needs: build-platform
+    outputs:
+      canonical_digest: ${{ steps.staging.outputs.canonical_digest }}
+      mirror_digest: ${{ steps.staging.outputs.mirror_digest }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download validated platform digests
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: digest-${{ inputs.image }}-*
+          path: /tmp/platform-digests
+          merge-multiple: true
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: sigstore/cosign-installer@874852de93c66509b01dc7cd80f7a5385182d017 # pinned commit
+
+      - name: Create identical non-release staging indexes
+        id: staging
+        run: |
+          set -Eeuo pipefail
+          mapfile -t digest_files < <(find /tmp/platform-digests -type f -print | sort)
+          test "${#digest_files[@]}" -eq 2
+          test -f /tmp/platform-digests/amd64
+          test -f /tmp/platform-digests/arm64
+          AMD64_IMAGE_DIGEST=$(cat /tmp/platform-digests/amd64)
+          ARM64_IMAGE_DIGEST=$(cat /tmp/platform-digests/arm64)
+          for digest in "$AMD64_IMAGE_DIGEST" "$ARM64_IMAGE_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+          test "$AMD64_IMAGE_DIGEST" != "$ARM64_IMAGE_DIGEST"
+          staging_tag="staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}"
+
+          docker buildx imagetools create \
+            --tag "$GHCR_IMAGE:$staging_tag" \
+            "$GHCR_IMAGE@$AMD64_IMAGE_DIGEST" \
+            "$GHCR_IMAGE@$ARM64_IMAGE_DIGEST"
+          docker buildx imagetools create \
+            --tag "$DOCKERHUB_IMAGE:$staging_tag" \
+            "$DOCKERHUB_IMAGE@$AMD64_IMAGE_DIGEST" \
+            "$DOCKERHUB_IMAGE@$ARM64_IMAGE_DIGEST"
+
+          raw_index=$(mktemp)
+          trap 'rm -f "$raw_index"' EXIT
+          docker buildx imagetools inspect "$GHCR_IMAGE:$staging_tag" --raw > "$raw_index"
+          jq -e \
+            --arg amd64 "$AMD64_IMAGE_DIGEST" \
+            --arg arm64 "$ARM64_IMAGE_DIGEST" \
+            '
+              [.manifests[] | select(
+                .mediaType == "application/vnd.oci.image.manifest.v1+json"
+                or .mediaType == "application/vnd.docker.distribution.manifest.v2+json"
+              )] as $images
+              | ($images | length) == 2
+              and any($images[]; .platform.os == "linux" and .platform.architecture == "amd64" and .digest == $amd64)
+              and any($images[]; .platform.os == "linux" and .platform.architecture == "arm64" and .digest == $arm64)
+            ' "$raw_index" >/dev/null
+
+          canonical_digest=$(docker buildx imagetools inspect \
+            "$GHCR_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          mirror_digest=$(docker buildx imagetools inspect \
+            "$DOCKERHUB_IMAGE:$staging_tag" \
+            --format '{{json .Manifest}}' | jq -er .digest)
+          test "$canonical_digest" = "$mirror_digest"
+          {
+            echo "canonical_digest=$canonical_digest"
+            echo "mirror_digest=$mirror_digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest final multi-architecture index provenance on GHCR
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-name: ${{ env.GHCR_IMAGE }}
+          subject-digest: ${{ steps.staging.outputs.canonical_digest }}
+          push-to-registry: true
+
+      - name: Sign immutable staging index digests
+        env:
+          CANONICAL_DIGEST: ${{ steps.staging.outputs.canonical_digest }}
+          MIRROR_DIGEST: ${{ steps.staging.outputs.mirror_digest }}
+        run: |
+          cosign sign --yes "$GHCR_IMAGE@$CANONICAL_DIGEST"
+          cosign sign --yes "$DOCKERHUB_IMAGE@$MIRROR_DIGEST"
+
+  promote-public:
+    needs: publish-index
+    if: needs.publish-index.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Promote public references with Docker Hub first and GHCR last
+        env:
+          TARGET_DIGEST: ${{ needs.publish-index.outputs.canonical_digest }}
+          MIRROR_DIGEST: ${{ needs.publish-index.outputs.mirror_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+          PROMOTE_LATEST: ${{ github.ref == 'refs/heads/main' }}
+        run: .github/scripts/reconcile-public-tags.sh
+
+  reconcile-public:
+    needs: [publish-index, promote-public]
+    if: always() && needs.publish-index.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Reconcile/repair public references
+        env:
+          TARGET_DIGEST: ${{ needs.publish-index.outputs.canonical_digest }}
+          MIRROR_DIGEST: ${{ needs.publish-index.outputs.mirror_digest }}
+          RELEASE_SHA: ${{ github.sha }}
+          PROMOTE_LATEST: ${{ github.ref == 'refs/heads/main' }}
+        run: .github/scripts/reconcile-public-tags.sh

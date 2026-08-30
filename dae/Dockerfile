@@ -11,6 +11,7 @@
 #
 # The FROM digest is pinned; Renovate opens bump PRs.
 FROM daeuniverse/dae:latest@sha256:e9c8bf973e0f2a746503efa654248f2c4edc00d9fc3c3b33829a9c732d93bb37
+ARG VCS_REF=unknown
 
 # The base image ships only busybox sh + wget; add the updater toolchain.
 RUN apk add --no-cache curl python3 tini coreutils
@@ -29,6 +30,11 @@ ENV DAE_OPS_LOCAL=1 \
     DAE_RUNTIME=/etc/dae \
     DAE_RULE_MANIFEST=/config/rule-providers.json \
     DAE_CURL=curl
+
+LABEL org.opencontainers.image.title="dae with managed rules" \
+      org.opencontainers.image.description="Pinned dae runtime with in-container rule and GeoData updates." \
+      org.opencontainers.image.source="https://github.com/mrgeneralgoo/forge-images" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 # tini as PID 1 reaps the daemon plus the crond/curl/python3 update children.
 ENTRYPOINT ["/sbin/tini", "--"]
