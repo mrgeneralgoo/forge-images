@@ -341,7 +341,10 @@ jobs:
 
   reconcile-public:
     needs: [publish-index, promote-public]
-    if: always() && needs.publish-index.result == 'success'
+    if: >-
+      always() &&
+      needs.publish-index.result == 'success' &&
+      needs.promote-public.result != 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

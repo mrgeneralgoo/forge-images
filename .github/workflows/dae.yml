@@ -7,7 +7,6 @@ on:
       - 'dae/**'
       - '.github/workflows/dae.yml'
       - '.github/workflows/reusable-publish-image.yml'
-      - '.github/scripts/reconcile-public-tags.sh'
   workflow_dispatch:
 
 concurrency:
