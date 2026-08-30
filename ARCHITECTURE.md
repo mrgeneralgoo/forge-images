@@ -46,9 +46,12 @@ Responsibilities:
 repository policy, scans for secrets, and builds/tests every changed image for
 both architectures.
 
-Changes to a caller, the shared publication workflow, or CI itself trigger the
-corresponding image validation. CI runs on every pull request so required checks
-remain stable and new file types cannot bypass validation.
+A checkout-free preflight queries pull-request changed files once and creates
+only the affected image's amd64 and arm64 jobs. A caller change validates its
+image; changes to the reusable publication workflow or CI validate all images.
+Reconciliation workflow and script changes run policy, syntax, and executable
+repair fixtures without building images. The fixed `image-validation` summary
+job keeps the image check name stable even when the dynamic matrix is empty.
 
 Platform jobs run natively: amd64 uses `ubuntu-latest` and arm64 uses
 `ubuntu-24.04-arm`, without QEMU emulation. PR builds may read the publication
@@ -60,7 +63,9 @@ loaded-image smoke test on either architecture.
 
 Each image has a thin caller at `.github/workflows/<image>.yml`. All callers use
 `.github/workflows/reusable-publish-image.yml`, which owns the complete
-publication sequence.
+publication sequence. A caller publishes only when its image directory, its own
+workflow, or the reusable publication workflow changes; repair-only changes do
+not rebuild images.
 
 Per platform:
 
@@ -93,13 +98,15 @@ receives mirrored manifests and signatures.
 Public `sha-*` and `latest` tags converge through one shared idempotent script.
 It writes Docker Hub first and GHCR last, retries transient registry failures
 with bounded backoff, and treats GHCR as the commit point when repairing a
-split tag. `.github/workflows/reconcile-public-tags.yml` repairs each source SHA in its
-own idempotent job after publication and can be rerun manually without
-rebuilding. Every six hours it also paginates through the complete main-branch
-publication history and repairs every discoverable `sha-*` reference, so a
-pending job displaced by later publications is re-enqueued from durable GitHub
-run history. A separate sweep repairs `latest` to the newest published SHA
-while holding the image's publication concurrency group.
+split tag. Successful promotion is already verified by that script and does not
+run an immediate repair or a second `workflow_run` recovery. Failed or cancelled
+publication starts `.github/workflows/reconcile-public-tags.yml`, and operators
+can rerun it manually without rebuilding. Every six hours it also paginates
+through the complete main-branch publication history and repairs every
+discoverable `sha-*` reference, so a pending job displaced by later publications
+is re-enqueued from durable GitHub run history. A separate sweep repairs
+`latest` to the newest published SHA while holding the image's publication
+concurrency group.
 
 Keyless signature verification uses the reusable workflow identity:
 
@@ -204,7 +211,8 @@ without a demonstrated consumer requirement.
 4. Verify every pinned upstream has amd64 and arm64 manifests.
 5. Add a thin caller copied from an existing retained image and change only the
    slug, display name, and path.
-6. Add the slug to the CI matrix and repository layout contract.
+6. Add the slug to the CI changed-files filters, matrix builder, and
+   repository layout contract.
 7. Add a preview row to the root README and keep detailed usage in the image
    README.
 8. Add protected Renovate packages only when updates need manual review.

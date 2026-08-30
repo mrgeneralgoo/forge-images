@@ -59,40 +59,179 @@ jobs:
           done
 
           ci_workflow=.github/workflows/ci.yml
-          ci_build=$(sed -n '/^  validate:/,$p' "$ci_workflow")
-          ruby - "$workflow" "$ci_workflow" <<'RUBY'
+          recovery=.github/workflows/reconcile-public-tags.yml
+          ci_build=$(sed -n '/^  validate:/,/^  image-validation:/p' "$ci_workflow")
+          matrix_script=$(mktemp)
+          aggregate_script=$(mktemp)
+          ruby - "$workflow" "$ci_workflow" "$matrix_script" "$recovery" "$aggregate_script" <<'RUBY'
           require 'yaml'
+
+          load_workflow = lambda do |path|
+            YAML.safe_load(File.read(path), permitted_classes: [], permitted_symbols: [], aliases: true)
+          end
 
           expected_runners = [
             {'arch' => 'amd64', 'runner' => 'ubuntu-latest'},
             {'arch' => 'arm64', 'runner' => 'ubuntu-24.04-arm'}
           ]
-          valid_runner_matrix = lambda do |matrix|
-            matrix['arch'] == %w[amd64 arm64] &&
-              matrix['include'] == expected_runners
+          publication = load_workflow.call(ARGV[0])
+          platform = publication.fetch('jobs').fetch('build-platform')
+          platform_matrix = platform.fetch('strategy').fetch('matrix')
+          abort 'invalid publication native runner matrix' unless
+            platform_matrix['arch'] == %w[amd64 arm64] && platform_matrix['include'] == expected_runners
+          abort 'invalid publication runs-on expression' unless platform.fetch('runs-on') == '$' + '{{ matrix.runner }}'
+
+          swapped = Marshal.load(Marshal.dump(platform_matrix))
+          swapped['include'].each do |row|
+            row['runner'] = row['arch'] == 'amd64' ? 'ubuntu-24.04-arm' : 'ubuntu-latest'
+          end
+          abort 'swapped publication runner matrix passed validation' if swapped['include'] == expected_runners
+
+          normalize = ->(value) { value.split.join(' ') }
+          reconcile = publication.fetch('jobs').fetch('reconcile-public')
+          expected_reconcile_if = "always() && needs.publish-index.result == 'success' && needs.promote-public.result != 'success'"
+          abort 'invalid immediate reconciliation condition' unless
+            normalize.call(reconcile.fetch('if')) == expected_reconcile_if
+          immediate_recovery = lambda do |publish_result, promote_result|
+            publish_result == 'success' && promote_result != 'success'
+          end
+          {
+            %w[success success] => false,
+            %w[success failure] => true,
+            %w[success cancelled] => true,
+            %w[failure skipped] => false
+          }.each do |results, expected|
+            abort "invalid immediate recovery truth table: #{results.join('/')}" unless
+              immediate_recovery.call(*results) == expected
           end
 
-          ARGV.each do |path|
-            workflow = YAML.safe_load(
-              File.read(path),
-              permitted_classes: [],
-              permitted_symbols: [],
-              aliases: true
-            )
-            job = path.end_with?('/ci.yml') ? 'validate' : 'build-platform'
-            definition = workflow.fetch('jobs').fetch(job)
-            matrix = definition.fetch('strategy').fetch('matrix')
-            abort "invalid native runner matrix: #{path}" unless valid_runner_matrix.call(matrix)
-            expected_runs_on = '$' + '{{ matrix.runner }}'
-            abort "invalid runs-on expression: #{path}" unless definition.fetch('runs-on') == expected_runs_on
+          ci = load_workflow.call(ARGV[1])
+          jobs = ci.fetch('jobs')
+          detect = jobs.fetch('detect-images')
+          detect_steps = detect.fetch('steps')
+          abort 'detect-images checks out the repository' if
+            detect_steps.any? { |step| step['uses']&.start_with?('actions/checkout@') }
+          path_filters = detect_steps.select { |step| step['uses']&.start_with?('dorny/paths-filter@') }
+          abort 'detect-images must query changed files exactly once' unless path_filters.length == 1
+          filters = YAML.safe_load(path_filters.first.fetch('with').fetch('filters'))
+          expected_filters = {
+            'dae' => ['dae/**', '.github/workflows/dae.yml'],
+            'fava' => ['fava/**', '.github/workflows/fava.yml'],
+            'mapservice-build' => ['mapservice-build/**', '.github/workflows/mapservice-build.yml'],
+            'wordpress-frankenphp' => ['wordpress-frankenphp/**', '.github/workflows/wordpress-frankenphp.yml'],
+            'shared-build' => ['.github/workflows/reusable-publish-image.yml', '.github/workflows/ci.yml']
+          }
+          abort 'invalid changed-files filters' unless filters == expected_filters
 
-            swapped = Marshal.load(Marshal.dump(matrix))
-            swapped['include'].each do |row|
-              row['runner'] = row['arch'] == 'amd64' ? 'ubuntu-24.04-arm' : 'ubuntu-latest'
-            end
-            abort "swapped runner matrix passed validation: #{path}" if valid_runner_matrix.call(swapped)
+          matrix_step = detect_steps.find { |step| step['name'] == 'Build image matrix' }
+          abort 'missing dynamic matrix builder' unless matrix_step&.fetch('id') == 'matrix'
+          File.write(ARGV[2], matrix_step.fetch('run'))
+
+          validate = jobs.fetch('validate')
+          abort 'validate does not depend on detect-images' unless validate.fetch('needs') == 'detect-images'
+          abort 'validate does not short-circuit empty matrices' unless
+            validate.fetch('if') == "needs.detect-images.outputs.has_images == 'true'"
+          abort 'invalid dynamic validation matrix' unless
+            validate.fetch('strategy').fetch('matrix') == '$' + '{{ fromJSON(needs.detect-images.outputs.matrix) }}'
+          abort 'invalid validation runs-on expression' unless validate.fetch('runs-on') == '$' + '{{ matrix.runner }}'
+          abort 'validate repeats changed-files detection' if
+            validate.fetch('steps').any? { |step| step['uses']&.start_with?('dorny/paths-filter@') }
+
+          aggregate = jobs.fetch('image-validation')
+          abort 'invalid image-validation dependencies' unless aggregate.fetch('needs') == %w[detect-images validate]
+          abort 'image-validation must always summarize dependencies' unless aggregate.fetch('if') == 'always()'
+          abort 'image-validation must contain one local step' unless
+            aggregate.fetch('steps').length == 1 && !aggregate.fetch('steps').first.key?('uses')
+          File.write(ARGV[4], aggregate.fetch('steps').first.fetch('run'))
+
+          recovery = load_workflow.call(ARGV[3])
+          triggers = recovery['on'] || recovery[true]
+          expected_workflows = [
+            'Build and publish dae',
+            'Build and publish Fava',
+            'Build and publish mapservice-build',
+            'Build and publish WordPress FrankenPHP'
+          ]
+          abort 'invalid workflow-run recovery trigger' unless
+            triggers.fetch('workflow_run') == {'workflows' => expected_workflows, 'types' => ['completed']}
+          abort 'missing scheduled durable recovery' unless triggers.fetch('schedule') == [{'cron' => '17 */6 * * *'}]
+          abort 'missing manual recovery trigger' unless triggers.key?('workflow_dispatch')
+
+          resolve = recovery.fetch('jobs').fetch('resolve')
+          expected_resolve_if = "(github.event_name == 'workflow_dispatch') || (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.conclusion != 'success')"
+          abort 'invalid workflow-run recovery condition' unless
+            normalize.call(resolve.fetch('if')) == expected_resolve_if
+          workflow_recovery = lambda do |event_name, same_repository, conclusion|
+            event_name == 'workflow_dispatch' ||
+              (event_name == 'workflow_run' && same_repository && conclusion != 'success')
+          end
+          [
+            ['workflow_dispatch', true, nil, true],
+            ['workflow_run', true, 'success', false],
+            ['workflow_run', true, 'failure', true],
+            ['workflow_run', true, 'cancelled', true],
+            ['workflow_run', false, 'failure', false],
+            ['schedule', true, nil, false]
+          ].each do |event_name, same_repository, conclusion, expected|
+            abort "invalid workflow recovery truth table: #{event_name}/#{conclusion}" unless
+              workflow_recovery.call(event_name, same_repository, conclusion) == expected
+          end
+          abort 'scheduled SHA sweep condition changed' unless
+            recovery.fetch('jobs').fetch('sweep-sha-history').fetch('if') == "github.event_name == 'schedule'"
+          abort 'scheduled latest sweep condition changed' unless
+            recovery.fetch('jobs').fetch('sweep-latest').fetch('if') == "github.event_name == 'schedule'"
+
+          %w[dae fava mapservice-build wordpress-frankenphp].each do |image|
+            caller = load_workflow.call(File.join(File.dirname(ARGV[0]), "#{image}.yml"))
+            caller_triggers = caller['on'] || caller[true]
+            expected_paths = [
+              "#{image}/**",
+              ".github/workflows/#{image}.yml",
+              '.github/workflows/reusable-publish-image.yml'
+            ]
+            abort "invalid publication paths: #{image}" unless
+              caller_triggers.fetch('push').fetch('paths') == expected_paths
+            abort "missing manual publication trigger: #{image}" unless caller_triggers.key?('workflow_dispatch')
           end
           RUBY
+
+          run_matrix_fixture() {
+            local changes=$1 expected_matrix=$2 expected_has_images=$3 output matrix has_images
+            output=$(mktemp)
+            CHANGED_FILTERS="$changes" GITHUB_OUTPUT="$output" bash "$matrix_script"
+            matrix=$(sed -n 's/^matrix=//p' "$output")
+            has_images=$(sed -n 's/^has_images=//p' "$output")
+            rm -f "$output"
+            jq -e --argjson expected "$expected_matrix" '. == $expected' <<<"$matrix" >/dev/null
+            test "$has_images" = "$expected_has_images"
+          }
+
+          run_matrix_fixture '["wordpress-frankenphp"]' \
+            '{"include":[{"image":"wordpress-frankenphp","arch":"amd64","runner":"ubuntu-latest"},{"image":"wordpress-frankenphp","arch":"arm64","runner":"ubuntu-24.04-arm"}]}' true
+          run_matrix_fixture '["fava","dae"]' \
+            '{"include":[{"image":"dae","arch":"amd64","runner":"ubuntu-latest"},{"image":"dae","arch":"arm64","runner":"ubuntu-24.04-arm"},{"image":"fava","arch":"amd64","runner":"ubuntu-latest"},{"image":"fava","arch":"arm64","runner":"ubuntu-24.04-arm"}]}' true
+          run_matrix_fixture '["shared-build"]' \
+            '{"include":[{"image":"dae","arch":"amd64","runner":"ubuntu-latest"},{"image":"dae","arch":"arm64","runner":"ubuntu-24.04-arm"},{"image":"fava","arch":"amd64","runner":"ubuntu-latest"},{"image":"fava","arch":"arm64","runner":"ubuntu-24.04-arm"},{"image":"mapservice-build","arch":"amd64","runner":"ubuntu-latest"},{"image":"mapservice-build","arch":"arm64","runner":"ubuntu-24.04-arm"},{"image":"wordpress-frankenphp","arch":"amd64","runner":"ubuntu-latest"},{"image":"wordpress-frankenphp","arch":"arm64","runner":"ubuntu-24.04-arm"}]}' true
+          run_matrix_fixture '[]' '{"include":[]}' false
+
+          run_aggregate_fixture() {
+            local expected=$1 detect_result=$2 has_images=$3 validate_result=$4 actual
+            if DETECT_RESULT="$detect_result" HAS_IMAGES="$has_images" VALIDATE_RESULT="$validate_result" \
+              bash "$aggregate_script" >/dev/null 2>&1; then
+              actual=success
+            else
+              actual=failure
+            fi
+            test "$actual" = "$expected"
+          }
+          run_aggregate_fixture success success true success
+          run_aggregate_fixture success success false skipped
+          run_aggregate_fixture failure success true failure
+          run_aggregate_fixture failure success true cancelled
+          run_aggregate_fixture failure failure false skipped
+          run_aggregate_fixture failure success false success
+          rm -f "$matrix_script" "$aggregate_script"
+
           qemu_action=docker/setup-qemu-action
           if grep -Fq "$qemu_action@" "$workflow" || grep -Fq "$qemu_action@" <<<"$ci_build"; then
             echo 'platform build workflow uses QEMU' >&2
@@ -130,10 +269,8 @@ jobs:
 
           script=.github/scripts/reconcile-public-tags.sh
           history=.github/scripts/reconcile-publication-history.sh
-          recovery=.github/workflows/reconcile-public-tags.yml
           grep -F 'name: Promote public references with Docker Hub first and GHCR last' "$workflow" >/dev/null
           grep -F 'name: Reconcile/repair public references' "$workflow" >/dev/null
-          grep -F "if: always() && needs.publish-index.result == 'success'" "$workflow" >/dev/null
           grep -F "canonical_digest: ${gha}{{ steps.staging.outputs.canonical_digest }}" "$workflow" >/dev/null
           grep -F "mirror_digest: ${gha}{{ steps.staging.outputs.mirror_digest }}" "$workflow" >/dev/null
           test "$(grep -c -F 'run: .github/scripts/reconcile-public-tags.sh' "$workflow")" -eq 2
@@ -267,40 +404,86 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
           GITLEAKS_ENABLE_SUMMARY: false
 
-  validate:
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        image: [dae, fava, mapservice-build, wordpress-frankenphp]
-        arch: [amd64, arm64]
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+  detect-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_images: ${{ steps.matrix.outputs.has_images }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Check image changes
+      - name: Detect affected images
         id: changes
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
-            changed:
-              - '${{ matrix.image }}/**'
-              - '.github/workflows/${{ matrix.image }}.yml'
+            dae:
+              - 'dae/**'
+              - '.github/workflows/dae.yml'
+            fava:
+              - 'fava/**'
+              - '.github/workflows/fava.yml'
+            mapservice-build:
+              - 'mapservice-build/**'
+              - '.github/workflows/mapservice-build.yml'
+            wordpress-frankenphp:
+              - 'wordpress-frankenphp/**'
+              - '.github/workflows/wordpress-frankenphp.yml'
+            shared-build:
               - '.github/workflows/reusable-publish-image.yml'
-              - '.github/workflows/reconcile-public-tags.yml'
-              - '.github/scripts/**'
               - '.github/workflows/ci.yml'
 
-      - if: steps.changes.outputs.changed == 'true'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - name: Build image matrix
+        id: matrix
+        env:
+          CHANGED_FILTERS: ${{ steps.changes.outputs.changes }}
+        run: |
+          set -Eeuo pipefail
+          jq -e 'type == "array" and all(.[]; type == "string")' <<<"$CHANGED_FILTERS" >/dev/null
+
+          images=(dae fava mapservice-build wordpress-frankenphp)
+          selected=()
+          if jq -e 'index("shared-build") != null' <<<"$CHANGED_FILTERS" >/dev/null; then
+            selected=("${images[@]}")
+          else
+            for image in "${images[@]}"; do
+              if jq -e --arg image "$image" 'index($image) != null' <<<"$CHANGED_FILTERS" >/dev/null; then
+                selected+=("$image")
+              fi
+            done
+          fi
+
+          matrix='{"include":[]}'
+          for image in "${selected[@]+"${selected[@]}"}"; do
+            matrix=$(jq -c --arg image "$image" '.include += [
+              {"image": $image, "arch": "amd64", "runner": "ubuntu-latest"},
+              {"image": $image, "arch": "arm64", "runner": "ubuntu-24.04-arm"}
+            ]' <<<"$matrix")
+          done
+
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          if ((${#selected[@]} > 0)); then
+            printf 'has_images=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'has_images=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  validate:
+    needs: detect-images
+    if: needs.detect-images.outputs.has_images == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-images.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
       - name: Build image
-        if: steps.changes.outputs.changed == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ./${{ matrix.image }}
@@ -315,5 +498,23 @@ jobs:
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
 
       - name: Test image
-        if: steps.changes.outputs.changed == 'true'
         run: ./${{ matrix.image }}/test.sh test-${{ matrix.image }}-${{ matrix.arch }}
+
+  image-validation:
+    if: always()
+    needs: [detect-images, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize image validation
+        env:
+          DETECT_RESULT: ${{ needs.detect-images.result }}
+          HAS_IMAGES: ${{ needs.detect-images.outputs.has_images }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          set -Eeuo pipefail
+          test "$DETECT_RESULT" = success
+          case "$HAS_IMAGES:$VALIDATE_RESULT" in
+            true:success|false:skipped) ;;
+            *) echo "unexpected image validation result: $HAS_IMAGES:$VALIDATE_RESULT" >&2; exit 1 ;;
+          esac
