@@ -29,6 +29,24 @@ arm64 build/smoke-test jobs only for affected images. Changes limited to tag
 reconciliation run policy and recovery fixtures without building images. Every
 main-branch publication:
 
+```mermaid
+flowchart LR
+    PR["Pull request"] --> CONTRACTS["repository-contracts"]
+    PR --> SECRETS["secret-scan"]
+    PR --> DETECT["detect-images<br/>one changed-files query"]
+    DETECT --> AFFECTED{"Affected images?"}
+    AFFECTED -->|"specific image"| MATRIX["amd64 + arm64 matrix"]
+    AFFECTED -->|"shared build logic"| ALL["all image matrices"]
+    AFFECTED -->|"none or repair-only"| SKIP["validate skipped"]
+    MATRIX --> TEST["native build + smoke test"]
+    ALL --> TEST
+    TEST --> SUMMARY["image-validation"]
+    SKIP --> SUMMARY
+    CONTRACTS --> RESULT{"PR checks"}
+    SECRETS --> RESULT
+    SUMMARY --> RESULT
+```
+
 1. Builds each architecture once in GHCR by digest.
 2. Resolves the exact platform image manifest, excluding attestation manifests.
 3. Scans the immutable digest with Trivy and uploads SARIF.
