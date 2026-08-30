@@ -58,6 +58,38 @@ jobs:
             grep -F -- "$text" "$workflow" >/dev/null
           done
 
+          ci_workflow=.github/workflows/ci.yml
+          ci_build=$(sed -n '/^  validate:/,$p' "$ci_workflow")
+          for text in \
+            "runs-on: ${gha}{{ matrix.runner }}" \
+            'arch: [amd64, arm64]' \
+            'runner: ubuntu-latest' \
+            'runner: ubuntu-24.04-arm'; do
+            grep -F -- "$text" "$workflow" >/dev/null
+            grep -F -- "$text" <<<"$ci_build" >/dev/null
+          done
+          qemu_action=docker/setup-qemu-action
+          if grep -Fq "$qemu_action@" "$workflow" || grep -Fq "$qemu_action@" <<<"$ci_build"; then
+            echo 'platform build workflow uses QEMU' >&2
+            exit 1
+          fi
+
+          for text in \
+            'uses: docker/build-push-action@' \
+            'load: true' \
+            'sbom: false' \
+            'provenance: false' \
+            "type=gha,scope=${gha}{{ matrix.image }}-${gha}{{ matrix.arch }}" \
+            "type=gha,scope=ci-${gha}{{ matrix.image }}-${gha}{{ matrix.arch }}" \
+            "cache-to: type=gha,mode=max,scope=ci-${gha}{{ matrix.image }}-${gha}{{ matrix.arch }}" \
+            "run: ./${gha}{{ matrix.image }}/test.sh test-${gha}{{ matrix.image }}-${gha}{{ matrix.arch }}"; do
+            grep -F -- "$text" <<<"$ci_build" >/dev/null
+          done
+          if grep -Fq "cache-to: type=gha,mode=max,scope=${gha}{{ matrix.image }}-${gha}{{ matrix.arch }}" <<<"$ci_build"; then
+            echo 'PR validation writes to the publication cache scope' >&2
+            exit 1
+          fi
+
           if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.build\.outputs\.digest' "$workflow"; then
             echo 'scan or attestation uses a BuildKit index digest' >&2
             exit 1
@@ -211,13 +243,18 @@ jobs:
           GITLEAKS_ENABLE_SUMMARY: false
 
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         image: [dae, fava, mapservice-build, wordpress-frankenphp]
         arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -234,20 +271,24 @@ jobs:
               - '.github/scripts/**'
               - '.github/workflows/ci.yml'
 
-      - if: steps.changes.outputs.changed == 'true' && matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
-
       - if: steps.changes.outputs.changed == 'true'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
-      - name: Build and test image
+      - name: Build image
         if: steps.changes.outputs.changed == 'true'
-        run: |
-          set -Eeuo pipefail
-          tag="test-${{ matrix.image }}-${{ matrix.arch }}"
-          docker buildx build \
-            --platform "linux/${{ matrix.arch }}" \
-            --load \
-            --tag "$tag" \
-            "./${{ matrix.image }}"
-          "./${{ matrix.image }}/test.sh" "$tag"
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: ./${{ matrix.image }}
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: test-${{ matrix.image }}-${{ matrix.arch }}
+          sbom: false
+          provenance: false
+          cache-from: |
+            type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+            type=gha,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.image }}-${{ matrix.arch }}
+
+      - name: Test image
+        if: steps.changes.outputs.changed == 'true'
+        run: ./${{ matrix.image }}/test.sh test-${{ matrix.image }}-${{ matrix.arch }}

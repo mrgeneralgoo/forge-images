@@ -50,6 +50,12 @@ Changes to a caller, the shared publication workflow, or CI itself trigger the
 corresponding image validation. CI runs on every pull request so required checks
 remain stable and new file types cannot bypass validation.
 
+Platform jobs run natively: amd64 uses `ubuntu-latest` and arm64 uses
+`ubuntu-24.04-arm`, without QEMU emulation. PR builds may read the publication
+`<image>-<arch>` cache and their own `ci-<image>-<arch>` cache, but write only to
+the `ci-*` scope. Cache hits skip repeated BuildKit work; they never replace the
+loaded-image smoke test on either architecture.
+
 ### 3. Publication
 
 Each image has a thin caller at `.github/workflows/<image>.yml`. All callers use
