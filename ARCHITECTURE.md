@@ -53,6 +53,37 @@ Reconciliation workflow and script changes run policy, syntax, and executable
 repair fixtures without building images. The fixed `image-validation` summary
 job keeps the image check name stable even when the dynamic matrix is empty.
 
+#### Pull-request Actions flow
+
+```mermaid
+flowchart TD
+    PR["Pull request"] --> CONTRACTS["repository-contracts"]
+    PR --> SECRETS["secret-scan"]
+    PR --> DETECT["detect-images<br/>GitHub REST API, no checkout"]
+
+    DETECT --> FILTER{"Changed-files filters"}
+    FILTER -->|"image directory or caller"| ONE["select affected image"]
+    FILTER -->|"reusable publish or CI"| ALL["select all images"]
+    FILTER -->|"repair-only or unrelated"| EMPTY["empty matrix"]
+
+    ONE --> MATRIX["dynamic matrix.include"]
+    ALL --> MATRIX
+    MATRIX --> AMD64["amd64<br/>ubuntu-latest"]
+    MATRIX --> ARM64["arm64<br/>ubuntu-24.04-arm"]
+    AMD64 --> BUILD1["BuildKit build + load"]
+    ARM64 --> BUILD2["BuildKit build + load"]
+    BUILD1 --> TEST1["real test.sh smoke test"]
+    BUILD2 --> TEST2["real test.sh smoke test"]
+    TEST1 --> SUMMARY["image-validation"]
+    TEST2 --> SUMMARY
+    EMPTY --> SKIPPED["validate skipped"]
+    SKIPPED --> SUMMARY
+
+    CONTRACTS --> RESULT{"Pull-request result"}
+    SECRETS --> RESULT
+    SUMMARY --> RESULT
+```
+
 Platform jobs run natively: amd64 uses `ubuntu-latest` and arm64 uses
 `ubuntu-24.04-arm`, without QEMU emulation. PR builds may read the publication
 `<image>-<arch>` cache and their own `ci-<image>-<arch>` cache, but write only to
@@ -66,6 +97,43 @@ Each image has a thin caller at `.github/workflows/<image>.yml`. All callers use
 publication sequence. A caller publishes only when its image directory, its own
 workflow, or the reusable publication workflow changes; repair-only changes do
 not rebuild images.
+
+#### Publication Actions flow
+
+```mermaid
+flowchart TD
+    MAIN["Push to main or workflow_dispatch"] --> TRIGGER{"Caller trigger"}
+    TRIGGER -->|"image directory or caller"| CALLER["one thin image caller"]
+    TRIGGER -->|"reusable publish workflow"| CALLERS["all four callers"]
+    TRIGGER -->|"repair-only change"| NOOP["no image publication"]
+    CALLER --> REUSE["reusable-publish-image"]
+    CALLERS --> REUSE
+
+    REUSE --> MATRIX["build-platform matrix"]
+    MATRIX --> AMD64["amd64 native runner"]
+    MATRIX --> ARM64["arm64 native runner"]
+
+    AMD64 --> BUILD1["build once to GHCR digest"]
+    ARM64 --> BUILD2["build once to GHCR digest"]
+    BUILD1 --> GATE1["resolve digest → Trivy → SBOM/provenance"]
+    BUILD2 --> GATE2["resolve digest → Trivy → SBOM/provenance"]
+    GATE1 --> MIRROR1["mirror to Docker Hub → verify → sign"]
+    GATE2 --> MIRROR2["mirror to Docker Hub → verify → sign"]
+
+    MIRROR1 --> INDEX["publish-index"]
+    MIRROR2 --> INDEX
+    INDEX --> IDENTICAL["create and verify identical multi-arch indexes"]
+    IDENTICAL --> SIGN["attest and sign immutable indexes"]
+    SIGN --> PROMOTE["promote-public"]
+    PROMOTE --> DH_SHA["Docker Hub sha-commit"]
+    DH_SHA --> GHCR_SHA["GHCR sha-commit"]
+    GHCR_SHA --> MAIN_ONLY{"main branch?"}
+    MAIN_ONLY -->|"yes"| DH_LATEST["Docker Hub latest"]
+    DH_LATEST --> GHCR_LATEST["GHCR latest"]
+    MAIN_ONLY -->|"no"| COMPLETE["publication complete"]
+    GHCR_LATEST --> COMPLETE
+    PROMOTE -.->|"non-success at any tag operation"| REPAIR["reconcile-public"]
+```
 
 Per platform:
 
@@ -107,6 +175,34 @@ discoverable `sha-*` reference, so a pending job displaced by later publications
 is re-enqueued from durable GitHub run history. A separate sweep repairs
 `latest` to the newest published SHA while holding the image's publication
 concurrency group.
+
+#### Recovery Actions flow
+
+```mermaid
+flowchart TD
+    COMPLETE["Same-repository publication completed"] --> CONCLUSION{"Conclusion"}
+    CONCLUSION -->|"success"| SKIP["workflow_run recovery skipped"]
+    CONCLUSION -->|"any non-success"| RESOLVE["resolve image + release SHA"]
+    MANUAL["workflow_dispatch"] --> RESOLVE
+
+    RESOLVE --> SHA["reconcile-sha"]
+    SHA --> DISCOVER["discover intended digest from either registry"]
+    DISCOVER --> VERIFY["verify digest exists in both registries"]
+    VERIFY --> DH_SHA["converge Docker Hub sha tag"]
+    DH_SHA --> GHCR_SHA["converge GHCR sha tag"]
+    GHCR_SHA --> OPTIONAL{"manual promote_latest?"}
+    OPTIONAL -->|"no"| DONE["recovery complete"]
+    OPTIONAL -->|"yes"| LOCK["acquire image publication lock"]
+    LOCK --> DH_LATEST["converge Docker Hub latest"]
+    DH_LATEST --> GHCR_LATEST["converge GHCR latest"]
+    GHCR_LATEST --> DONE
+
+    SCHEDULE["schedule: every 6 hours"] --> HISTORY["sweep-sha-history"]
+    HISTORY --> PAGINATE["paginate complete main publication history"]
+    PAGINATE --> REPAIR_SHA["repair every discoverable sha tag"]
+    SCHEDULE --> LATEST["sweep-latest under publication lock"]
+    LATEST --> NEWEST["repair latest to newest published SHA"]
+```
 
 Keyless signature verification uses the reusable workflow identity:
 
