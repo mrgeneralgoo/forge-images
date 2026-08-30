@@ -60,14 +60,39 @@ jobs:
 
           ci_workflow=.github/workflows/ci.yml
           ci_build=$(sed -n '/^  validate:/,$p' "$ci_workflow")
-          for text in \
-            "runs-on: ${gha}{{ matrix.runner }}" \
-            'arch: [amd64, arm64]' \
-            'runner: ubuntu-latest' \
-            'runner: ubuntu-24.04-arm'; do
-            grep -F -- "$text" "$workflow" >/dev/null
-            grep -F -- "$text" <<<"$ci_build" >/dev/null
-          done
+          ruby - "$workflow" "$ci_workflow" <<'RUBY'
+          require 'yaml'
+
+          expected_runners = [
+            {'arch' => 'amd64', 'runner' => 'ubuntu-latest'},
+            {'arch' => 'arm64', 'runner' => 'ubuntu-24.04-arm'}
+          ]
+          valid_runner_matrix = lambda do |matrix|
+            matrix['arch'] == %w[amd64 arm64] &&
+              matrix['include'] == expected_runners
+          end
+
+          ARGV.each do |path|
+            workflow = YAML.safe_load(
+              File.read(path),
+              permitted_classes: [],
+              permitted_symbols: [],
+              aliases: true
+            )
+            job = path.end_with?('/ci.yml') ? 'validate' : 'build-platform'
+            definition = workflow.fetch('jobs').fetch(job)
+            matrix = definition.fetch('strategy').fetch('matrix')
+            abort "invalid native runner matrix: #{path}" unless valid_runner_matrix.call(matrix)
+            expected_runs_on = '$' + '{{ matrix.runner }}'
+            abort "invalid runs-on expression: #{path}" unless definition.fetch('runs-on') == expected_runs_on
+
+            swapped = Marshal.load(Marshal.dump(matrix))
+            swapped['include'].each do |row|
+              row['runner'] = row['arch'] == 'amd64' ? 'ubuntu-24.04-arm' : 'ubuntu-latest'
+            end
+            abort "swapped runner matrix passed validation: #{path}" if valid_runner_matrix.call(swapped)
+          end
+          RUBY
           qemu_action=docker/setup-qemu-action
           if grep -Fq "$qemu_action@" "$workflow" || grep -Fq "$qemu_action@" <<<"$ci_build"; then
             echo 'platform build workflow uses QEMU' >&2
