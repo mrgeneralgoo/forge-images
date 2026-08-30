@@ -40,15 +40,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           workflow=.github/workflows/reusable-publish-image.yml
+          gha='$'
           for text in \
             'arch: [amd64, arm64]' \
-            'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
+            "outputs: type=image,name=${gha}{{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true" \
             'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
             '.platform.os? == $os' \
             '.platform.architecture? == $arch' \
             'vnd.docker.reference.type' \
-            'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}' \
-            'subject-digest: ${{ steps.resolve.outputs.image_digest }}' \
+            "image-ref: ${gha}{{ env.GHCR_IMAGE }}@${gha}{{ steps.resolve.outputs.image_digest }}" \
+            "subject-digest: ${gha}{{ steps.resolve.outputs.image_digest }}" \
             "exit-code: '0'" \
             'test "$mirror_digest" = "$IMAGE_DIGEST"' \
             'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"' \
@@ -65,7 +66,7 @@ jobs:
             echo 'publication workflow suppresses operational failures' >&2
             exit 1
           fi
-          if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
+          if grep -Fq "type=image,name=${gha}{{ env.DOCKERHUB_IMAGE }}" "$workflow"; then
             echo 'publication workflow builds separately for both registries' >&2
             exit 1
           fi
@@ -76,8 +77,8 @@ jobs:
           grep -F 'name: Promote public references with Docker Hub first and GHCR last' "$workflow" >/dev/null
           grep -F 'name: Reconcile/repair public references' "$workflow" >/dev/null
           grep -F "if: always() && needs.publish-index.result == 'success'" "$workflow" >/dev/null
-          grep -F 'canonical_digest: ${{ steps.staging.outputs.canonical_digest }}' "$workflow" >/dev/null
-          grep -F 'mirror_digest: ${{ steps.staging.outputs.mirror_digest }}' "$workflow" >/dev/null
+          grep -F "canonical_digest: ${gha}{{ steps.staging.outputs.canonical_digest }}" "$workflow" >/dev/null
+          grep -F "mirror_digest: ${gha}{{ steps.staging.outputs.mirror_digest }}" "$workflow" >/dev/null
           test "$(grep -c -F 'run: .github/scripts/reconcile-public-tags.sh' "$workflow")" -eq 2
           grep -F 'RECONCILE_ATTEMPTS' "$script" >/dev/null
           grep -F 'retry ensure_reference_once' "$script" >/dev/null
@@ -87,8 +88,8 @@ jobs:
           grep -F 'schedule:' "$recovery" >/dev/null
           grep -F "cron: '17 */6 * * *'" "$recovery" >/dev/null
           grep -F 'workflow_dispatch:' "$recovery" >/dev/null
-          grep -F 'group: reconcile-sha-${{ needs.resolve.outputs.image }}-${{ needs.resolve.outputs.release_sha }}' "$recovery" >/dev/null
-          grep -F 'group: publish-${{ matrix.image }}' "$recovery" >/dev/null
+          grep -F "group: reconcile-sha-${gha}{{ needs.resolve.outputs.image }}-${gha}{{ needs.resolve.outputs.release_sha }}" "$recovery" >/dev/null
+          grep -F "group: publish-${gha}{{ matrix.image }}" "$recovery" >/dev/null
           grep -F 'cancel-in-progress: false' "$recovery" >/dev/null
           grep -F 'run: .github/scripts/reconcile-public-tags.sh' "$recovery" >/dev/null
           test "$(grep -c -F 'run: .github/scripts/reconcile-publication-history.sh' "$recovery")" -eq 2
