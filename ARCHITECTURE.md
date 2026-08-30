@@ -87,11 +87,13 @@ receives mirrored manifests and signatures.
 Public `sha-*` and `latest` tags converge through one shared idempotent script.
 It writes Docker Hub first and GHCR last, retries transient registry failures
 with bounded backoff, and treats GHCR as the commit point when repairing a
-split tag. `.github/workflows/reconcile-public-tags.yml` runs independently
-after each publication caller and can be rerun manually for an image and full
-source commit without rebuilding the image. It shares the image's publication
-concurrency group, so repair and publication cannot mutate the same tags at the
-same time.
+split tag. `.github/workflows/reconcile-public-tags.yml` repairs each source SHA in its
+own idempotent job after publication and can be rerun manually without
+rebuilding. Every six hours it also paginates through the complete main-branch
+publication history and repairs every discoverable `sha-*` reference, so a
+pending job displaced by later publications is re-enqueued from durable GitHub
+run history. A separate sweep repairs `latest` to the newest published SHA
+while holding the image's publication concurrency group.
 
 Keyless signature verification uses the reusable workflow identity:
 

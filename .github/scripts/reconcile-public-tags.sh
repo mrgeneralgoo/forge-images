@@ -12,9 +12,13 @@ fi
 
 attempts=${RECONCILE_ATTEMPTS:-5}
 delay=${RECONCILE_INITIAL_DELAY_SECONDS:-15}
+result_file=${RECONCILE_RESULT_FILE:-}
 if ! [[ "$attempts" =~ ^[1-9][0-9]*$ && "$delay" =~ ^[0-9]+$ ]]; then
   echo "invalid retry configuration" >&2
   exit 2
+fi
+if [[ -n "$result_file" ]]; then
+  : > "$result_file"
 fi
 
 imagetools() {
@@ -38,7 +42,7 @@ inspect_optional_once() {
   if inspect_digest "$ref" > "$output" 2> "$error"; then
     return 0
   fi
-  if grep -Eqi 'manifest unknown|name unknown|unexpected status.*404|response status.*404' "$error"; then
+  if grep -Eqi 'manifest unknown|name unknown|: not found([[:space:]]|$)|unexpected status.*404|response status.*404' "$error"; then
     : > "$output"
     return 0
   fi
@@ -116,6 +120,9 @@ fi
 
 retry digest_available_once "$DOCKERHUB_IMAGE" "$target"
 retry digest_available_once "$GHCR_IMAGE" "$target"
+if [[ -n "$result_file" ]]; then
+  printf '%s\n' "$target" > "$result_file"
+fi
 
 ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"
 ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"

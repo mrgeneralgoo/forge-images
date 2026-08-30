@@ -27,6 +27,7 @@ jobs:
           done
 
           test -x .github/scripts/reconcile-public-tags.sh
+          test -x .github/scripts/reconcile-publication-history.sh
           test -x .github/scripts/test-reconcile-public-tags.sh
           test -f .github/workflows/reconcile-public-tags.yml
 
@@ -70,6 +71,7 @@ jobs:
           fi
 
           script=.github/scripts/reconcile-public-tags.sh
+          history=.github/scripts/reconcile-publication-history.sh
           recovery=.github/workflows/reconcile-public-tags.yml
           grep -F 'name: Promote public references with Docker Hub first and GHCR last' "$workflow" >/dev/null
           grep -F 'name: Reconcile/repair public references' "$workflow" >/dev/null
@@ -82,10 +84,17 @@ jobs:
           grep -F 'ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"' "$script" >/dev/null
           grep -F 'ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"' "$script" >/dev/null
           grep -F 'workflow_run:' "$recovery" >/dev/null
+          grep -F 'schedule:' "$recovery" >/dev/null
+          grep -F "cron: '17 */6 * * *'" "$recovery" >/dev/null
           grep -F 'workflow_dispatch:' "$recovery" >/dev/null
-          grep -F 'group: publish-${{ needs.resolve.outputs.image }}' "$recovery" >/dev/null
+          grep -F 'group: reconcile-sha-${{ needs.resolve.outputs.image }}-${{ needs.resolve.outputs.release_sha }}' "$recovery" >/dev/null
+          grep -F 'group: publish-${{ matrix.image }}' "$recovery" >/dev/null
           grep -F 'cancel-in-progress: false' "$recovery" >/dev/null
           grep -F 'run: .github/scripts/reconcile-public-tags.sh' "$recovery" >/dev/null
+          test "$(grep -c -F 'run: .github/scripts/reconcile-publication-history.sh' "$recovery")" -eq 2
+          grep -F 'while :' "$history" >/dev/null
+          grep -F 'page=$((page + 1))' "$history" >/dev/null
+          grep -F 'if [[ "$RECONCILE_MODE" == sha ]]' "$history" >/dev/null
 
           dockerhub_sha_line=$(grep -n -F 'ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)
           ghcr_sha_line=$(grep -n -F 'ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)

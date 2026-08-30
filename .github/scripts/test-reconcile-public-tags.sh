@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 script="${BASH_SOURCE[0]%/*}/reconcile-public-tags.sh"
+history_script="${BASH_SOURCE[0]%/*}/reconcile-publication-history.sh"
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 backend="$fixture/imagetools"
@@ -140,5 +141,53 @@ test "$(tag_digest "$mirror" "sha-$sha")" = "$target"
 
 reset_fixture
 run_reconcile discover | grep -F 'nothing to reconcile' >/dev/null
+
+reset_fixture
+sha_a=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+sha_b=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+sha_c=cccccccccccccccccccccccccccccccccccccccc
+sha_d=dddddddddddddddddddddddddddddddddddddddd
+digest_a=sha256:$(printf '%064d' 11)
+digest_b=sha256:$(printf '%064d' 12)
+digest_c=sha256:$(printf '%064d' 13)
+for digest in "$digest_a" "$digest_b" "$digest_c"; do
+  make_available "$digest"
+done
+shas_file="$fixture/shas"
+printf '%s\n' "$sha_d" "$sha_c" "$sha_b" "$sha_a" > "$shas_file"
+printf '%s\n' "$digest_a" > "$fixture/tag-$(key "$mirror:sha-$sha_a")"
+printf '%s\n' "$digest_b" > "$fixture/tag-$(key "$ghcr:sha-$sha_b")"
+printf '%s\n' "$digest_c" > "$fixture/tag-$(key "$mirror:sha-$sha_c")"
+printf '%s\n' "$digest_c" > "$fixture/tag-$(key "$ghcr:sha-$sha_c")"
+
+env \
+  FAKE_STATE="$fixture" \
+  RECONCILE_BACKEND="$backend" \
+  RECONCILE_ATTEMPTS=1 \
+  RECONCILE_INITIAL_DELAY_SECONDS=0 \
+  RECONCILE_SHAS_FILE="$shas_file" \
+  RECONCILE_MODE=sha \
+  GHCR_IMAGE="$ghcr" \
+  DOCKERHUB_IMAGE="$mirror" \
+  "$history_script"
+for item in "$sha_a:$digest_a" "$sha_b:$digest_b" "$sha_c:$digest_c"; do
+  release_sha=${item%%:*}
+  digest=sha256:${item##*:sha256:}
+  test "$(tag_digest "$mirror" "sha-$release_sha")" = "$digest"
+  test "$(tag_digest "$ghcr" "sha-$release_sha")" = "$digest"
+done
+
+env \
+  FAKE_STATE="$fixture" \
+  RECONCILE_BACKEND="$backend" \
+  RECONCILE_ATTEMPTS=1 \
+  RECONCILE_INITIAL_DELAY_SECONDS=0 \
+  RECONCILE_SHAS_FILE="$shas_file" \
+  RECONCILE_MODE=latest \
+  GHCR_IMAGE="$ghcr" \
+  DOCKERHUB_IMAGE="$mirror" \
+  "$history_script"
+test "$(tag_digest "$mirror" latest)" = "$digest_c"
+test "$(tag_digest "$ghcr" latest)" = "$digest_c"
 
 echo 'cross-registry reconciliation fixtures passed'

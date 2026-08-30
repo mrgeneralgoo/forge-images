@@ -39,8 +39,9 @@ architectures. Every main-branch publication:
 
 Vulnerability findings are informational; scanner, registry, attestation, and
 signing operational failures remain fatal. Public tag updates use bounded
-retries plus an independent, manually rerunnable reconciliation workflow so a
-partial cross-registry promotion can be repaired without rebuilding. See
+retries plus an independent reconciliation workflow. It repairs each completed
+publication and periodically sweeps the full publication history, so partial
+cross-registry promotion can be recovered without rebuilding. See
 [`.github/vulnerability-policy.md`](.github/vulnerability-policy.md).
 
 For the naming, directory, architecture, dependency, and onboarding contract,

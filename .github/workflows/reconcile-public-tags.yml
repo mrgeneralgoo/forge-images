@@ -8,6 +8,8 @@ on:
       - Build and publish mapservice-build
       - Build and publish WordPress FrankenPHP
     types: [completed]
+  schedule:
+    - cron: '17 */6 * * *'
   workflow_dispatch:
     inputs:
       image:
@@ -24,24 +26,27 @@ on:
         required: true
         type: string
       promote_latest:
-        description: Also converge latest
+        description: Also converge latest under the publication lock
         required: true
         default: false
         type: boolean
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
 jobs:
   resolve:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_repository.full_name == github.repository
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       image: ${{ steps.target.outputs.image }}
       release_sha: ${{ steps.target.outputs.release_sha }}
-      promote_latest: ${{ steps.target.outputs.promote_latest }}
     steps:
       - name: Resolve publication target
         id: target
@@ -49,10 +54,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_BRANCH: ${{ github.event.workflow_run.head_branch }}
           INPUT_IMAGE: ${{ inputs.image }}
           INPUT_SHA: ${{ inputs.release_sha }}
-          INPUT_LATEST: ${{ inputs.promote_latest }}
         run: |
           set -Eeuo pipefail
           if [[ "$EVENT_NAME" == workflow_run ]]; then
@@ -64,31 +67,28 @@ jobs:
               *) echo 'unsupported publication workflow' >&2; exit 2 ;;
             esac
             release_sha=$WORKFLOW_SHA
-            [[ "$WORKFLOW_BRANCH" == main ]] && promote_latest=true || promote_latest=false
           else
             image=$INPUT_IMAGE
             release_sha=$INPUT_SHA
-            promote_latest=$INPUT_LATEST
           fi
           [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
           {
             echo "image=$image"
             echo "release_sha=$release_sha"
-            echo "promote_latest=$promote_latest"
           } >> "$GITHUB_OUTPUT"
 
-  reconcile:
+  reconcile-sha:
     needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: publish-${{ needs.resolve.outputs.image }}
+      group: reconcile-sha-${{ needs.resolve.outputs.image }}-${{ needs.resolve.outputs.release_sha }}
       cancel-in-progress: false
     env:
       GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ needs.resolve.outputs.image }}
       DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ needs.resolve.outputs.image }}
       RELEASE_SHA: ${{ needs.resolve.outputs.release_sha }}
-      PROMOTE_LATEST: ${{ needs.resolve.outputs.promote_latest }}
+      PROMOTE_LATEST: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -105,5 +105,116 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
-      - name: Reconcile public references from durable sha tag
+      - name: Reconcile immutable source reference
         run: .github/scripts/reconcile-public-tags.sh
+
+  manual-latest:
+    needs: [resolve, reconcile-sha]
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: publish-${{ needs.resolve.outputs.image }}
+      cancel-in-progress: false
+    env:
+      GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ needs.resolve.outputs.image }}
+      DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ needs.resolve.outputs.image }}
+      RELEASE_SHA: ${{ needs.resolve.outputs.release_sha }}
+      PROMOTE_LATEST: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - run: .github/scripts/reconcile-public-tags.sh
+
+  sweep-sha-history:
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: dae
+            workflow_file: dae.yml
+          - image: fava
+            workflow_file: fava.yml
+          - image: mapservice-build
+            workflow_file: mapservice-build.yml
+          - image: wordpress-frankenphp
+            workflow_file: wordpress-frankenphp.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ matrix.image }}
+      DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ matrix.image }}
+      RECONCILE_MODE: sha
+      WORKFLOW_FILE: ${{ matrix.workflow_file }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - run: .github/scripts/reconcile-publication-history.sh
+
+  sweep-latest:
+    if: github.event_name == 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: dae
+            workflow_file: dae.yml
+          - image: fava
+            workflow_file: fava.yml
+          - image: mapservice-build
+            workflow_file: mapservice-build.yml
+          - image: wordpress-frankenphp
+            workflow_file: wordpress-frankenphp.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: publish-${{ matrix.image }}
+      cancel-in-progress: false
+    env:
+      GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ matrix.image }}
+      DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ matrix.image }}
+      RECONCILE_MODE: latest
+      WORKFLOW_FILE: ${{ matrix.workflow_file }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
+          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - run: .github/scripts/reconcile-publication-history.sh
