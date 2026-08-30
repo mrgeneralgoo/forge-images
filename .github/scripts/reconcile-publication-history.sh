@@ -11,6 +11,20 @@ case "$RECONCILE_MODE" in
 esac
 
 script="${BASH_SOURCE[0]%/*}/reconcile-public-tags.sh"
+
+api_get() {
+  local url="$1"
+  if [[ -n "${RECONCILE_API_BACKEND:-}" ]]; then
+    "$RECONCILE_API_BACKEND" "$url"
+  else
+    curl -fsSL --retry 3 --retry-all-errors \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "$url"
+  fi
+}
+
 shas=$(mktemp)
 trap 'rm -f "$shas"' EXIT
 
@@ -23,13 +37,10 @@ else
   : "${WORKFLOW_FILE:?WORKFLOW_FILE is required}"
   page=1
   while :; do
-    payload=$(curl -fsSL --retry 3 --retry-all-errors \
-      -H "Authorization: Bearer $GITHUB_TOKEN" \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2022-11-28' \
-      "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?branch=main&status=completed&per_page=100&page=$page")
+    payload=$(api_get \
+      "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_FILE/runs?per_page=100&page=$page")
     count=$(jq -er '.workflow_runs | length' <<< "$payload")
-    jq -r '.workflow_runs[].head_sha' <<< "$payload" >> "$shas"
+    jq -r '.workflow_runs[] | select(.head_branch == "main" and .status == "completed") | .head_sha' <<< "$payload" >> "$shas"
     (( count < 100 )) && break
     page=$((page + 1))
   done
@@ -38,6 +49,12 @@ fi
 ordered=$(mktemp)
 trap 'rm -f "$shas" "$ordered"' EXIT
 awk '/^[0-9a-f]{40}$/ && !seen[$0]++' "$shas" > "$ordered"
+if [[ -n "${RECONCILE_DISCOVERY_FILE:-}" ]]; then
+  cp "$ordered" "$RECONCILE_DISCOVERY_FILE"
+fi
+if [[ "${RECONCILE_DISCOVERY_ONLY:-false}" == true ]]; then
+  exit 0
+fi
 
 reconcile_sha() {
   local release_sha="$1" promote_latest="$2" result

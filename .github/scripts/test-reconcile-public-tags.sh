@@ -190,4 +190,68 @@ env \
 test "$(tag_digest "$mirror" latest)" = "$digest_c"
 test "$(tag_digest "$ghcr" latest)" = "$digest_c"
 
+api_backend="$fixture/api"
+cat > "$api_backend" <<'API'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+url=$1
+if [[ "$url" == *branch=* || "$url" == *status=* ]]; then
+  echo 'filtered workflow-run query is capped' >&2
+  exit 1
+fi
+page=${url##*page=}
+if (( page <= 10 )); then
+  first=$(((page - 1) * 100 + 1))
+  count=100
+elif (( page == 11 )); then
+  first=1001
+  count=1
+else
+  first=0
+  count=0
+fi
+printf '{"workflow_runs":['
+for ((offset = 0; offset < count; offset++)); do
+  (( offset > 0 )) && printf ','
+  sha=$(printf '%040x' $((first + offset)))
+  printf '{"head_branch":"main","status":"completed","head_sha":"%s"}' "$sha"
+done
+printf ']}\n'
+API
+chmod +x "$api_backend"
+discovered="$fixture/discovered"
+env \
+  RECONCILE_API_BACKEND="$api_backend" \
+  RECONCILE_DISCOVERY_FILE="$discovered" \
+  RECONCILE_DISCOVERY_ONLY=true \
+  RECONCILE_MODE=sha \
+  GITHUB_API_URL=https://api.github.test \
+  GITHUB_REPOSITORY=mrgeneralgoo/forge-images \
+  GITHUB_TOKEN=test \
+  WORKFLOW_FILE=dae.yml \
+  GHCR_IMAGE="$ghcr" \
+  DOCKERHUB_IMAGE="$mirror" \
+  "$history_script"
+test "$(wc -l < "$discovered" | tr -d ' ')" -eq 1001
+oldest=$(printf '%040x' 1001)
+test "$(tail -n 1 "$discovered")" = "$oldest"
+
+digest_oldest=sha256:$(printf '%064d' 14)
+make_available "$digest_oldest"
+printf '%s\n' "$digest_oldest" > "$fixture/tag-$(key "$mirror:sha-$oldest")"
+oldest_file="$fixture/oldest"
+printf '%s\n' "$oldest" > "$oldest_file"
+env \
+  FAKE_STATE="$fixture" \
+  RECONCILE_BACKEND="$backend" \
+  RECONCILE_ATTEMPTS=1 \
+  RECONCILE_INITIAL_DELAY_SECONDS=0 \
+  RECONCILE_SHAS_FILE="$oldest_file" \
+  RECONCILE_MODE=sha \
+  GHCR_IMAGE="$ghcr" \
+  DOCKERHUB_IMAGE="$mirror" \
+  "$history_script"
+test "$(tag_digest "$mirror" "sha-$oldest")" = "$digest_oldest"
+test "$(tag_digest "$ghcr" "sha-$oldest")" = "$digest_oldest"
+
 echo 'cross-registry reconciliation fixtures passed'

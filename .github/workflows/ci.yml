@@ -94,7 +94,15 @@ jobs:
           test "$(grep -c -F 'run: .github/scripts/reconcile-publication-history.sh' "$recovery")" -eq 2
           grep -F 'while :' "$history" >/dev/null
           grep -F 'page=$((page + 1))' "$history" >/dev/null
+          grep -F 'per_page=100&page=$page' "$history" >/dev/null
+          grep -F 'select(.head_branch == "main" and .status == "completed")' "$history" >/dev/null
+          if grep -Eq 'runs\?[^" ]*(branch|status)=' "$history"; then
+            echo 'history sweep uses a capped filtered workflow-run query' >&2
+            exit 1
+          fi
           grep -F 'if [[ "$RECONCILE_MODE" == sha ]]' "$history" >/dev/null
+          grep -F 'RECONCILE_DISCOVERY_ONLY' "$history" >/dev/null
+          grep -F '1001' .github/scripts/test-reconcile-public-tags.sh >/dev/null
 
           dockerhub_sha_line=$(grep -n -F 'ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)
           ghcr_sha_line=$(grep -n -F 'ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)
