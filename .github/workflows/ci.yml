@@ -2,116 +2,182 @@ name: Container CI
 
 on:
   pull_request:
-    paths:
-      - '**/Dockerfile'
-      - '**/requirements.txt'
-      - '**/test.sh'
-      - '**/update-*.sh'
-      - '**/.dockerignore'
-      - '**/NOTICE*'
-      - '**/notices/**'
-      - '.github/workflows/**'
-      - 'LICENSE'
-      - 'NOTICE.md'
-      - '.github/vulnerability-policy.md'
-      - 'README.md'
-      - 'renovate.json'
 
 jobs:
   repository-contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Validate Renovate merge policy
+
+      - name: Validate image layout and naming
         run: |
-          set -eu
-          # shellcheck disable=SC2016
-          policy='
-            def protected_packages: [
-              "golang",
-              "sqlc/sqlc",
-              "golangci/golangci-lint",
-              "wordpress",
-              "library/wordpress",
-              "ghcr.io/mrgeneralgoo/frankenphp"
-            ];
-            . as $config |
-            ($config.packageRules[-1] // {}) as $guard |
-            $config.platformAutomerge == false and
-            $guard.automerge == false and
-            $guard.matchManagers == ["dockerfile"] and
-            (([$guard | keys[]] -
-              ["automerge", "matchManagers", "matchPackageNames"]) | length == 0) and
-            ((protected_packages | sort) == (($guard.matchPackageNames // []) | sort))
-          '
-
-          check_policy() {
-            jq -e "$policy" "$1" >/dev/null
-          }
-          reject_policy() {
-            if check_policy "$1"; then
-              echo "Renovate policy contract accepted invalid fixture: $2" >&2
-              exit 1
-            fi
-          }
-
-          check_policy renovate.json
-
-          fixtures=$(mktemp -d)
-          trap 'rm -rf "$fixtures"' EXIT
-
-          jq '
-            .packageRules |= (
-              map(select((.matchPackageNames // []) | index("sqlc/sqlc"))) +
-              map(select(((.matchPackageNames // []) | index("sqlc/sqlc")) | not))
-            )
-          ' renovate.json > "$fixtures/reordered.json"
-          reject_policy "$fixtures/reordered.json" "protected rule before automerge rule"
-
-          jq '
-            .packageRules |= map(
-              if ((.matchPackageNames // []) | index("sqlc/sqlc"))
-              then .matchManagers = ["npm"]
-              else .
-              end
-            )
-          ' renovate.json > "$fixtures/wrong-manager.json"
-          reject_policy "$fixtures/wrong-manager.json" "protected rule with wrong manager"
-
-          jq '
-            .packageRules += [{
-              "matchManagers": ["dockerfile"],
-              "matchPackageNames": ["sqlc/sqlc"],
-              "automerge": true
-            }]
-          ' renovate.json > "$fixtures/later-automerge.json"
-          reject_policy "$fixtures/later-automerge.json" "later rule re-enabling automerge"
-
-          jq '
-            .packageRules[-1].excludePackageNames = ["sqlc/sqlc"]
-          ' renovate.json > "$fixtures/excluded-package.json"
-          reject_policy "$fixtures/excluded-package.json" "protected rule excluding a protected package"
-
-      - name: Validate vulnerability documentation policy
-        run: |
-          set -eu
-          documents=(README.md .github/vulnerability-policy.md)
-          for document in "${documents[@]}"; do
-            grep -F 'Trivy remains enabled' "$document" >/dev/null
-            grep -F 'Vulnerability findings are informational' "$document" >/dev/null
-            grep -F 'do not block image publication' "$document" >/dev/null
-            grep -F 'operational failures remain fatal' "$document" >/dev/null
+          set -Eeuo pipefail
+          images=(dae fava mapservice-build wordpress-frankenphp)
+          for image in "${images[@]}"; do
+            test -f "$image/Dockerfile"
+            test -f "$image/.dockerignore"
+            test -x "$image/test.sh"
+            test -f "$image/README.md"
+            test -f ".github/workflows/$image.yml"
+            grep -F "image: $image" ".github/workflows/$image.yml" >/dev/null
+            grep -F "group: publish-$image" ".github/workflows/$image.yml" >/dev/null
+            grep -F 'cancel-in-progress: false' ".github/workflows/$image.yml" >/dev/null
+            grep -F 'uses: ./.github/workflows/reusable-publish-image.yml' ".github/workflows/$image.yml" >/dev/null
           done
 
-          private_repo_ref=$(printf '%s/%s%s' mrgeneralgoo moshou ditu)
-          if grep -Eiq 'HIGH/CRITICAL findings block publication|only a clean scan may proceed|Trivy (is|has been|was) removed' "${documents[@]}" ||
-             grep -Fqi "$private_repo_ref" "${documents[@]}"; then
-            echo 'vulnerability documentation violates the public policy contract' >&2
+          test -x .github/scripts/reconcile-public-tags.sh
+          test -x .github/scripts/test-reconcile-public-tags.sh
+          test -f .github/workflows/reconcile-public-tags.yml
+
+          for removed in openclaw pkm-mcp serversideup; do
+            test ! -e "$removed"
+            test ! -e ".github/workflows/$removed.yml"
+          done
+
+      - name: Validate publication contract
+        run: |
+          set -Eeuo pipefail
+          workflow=.github/workflows/reusable-publish-image.yml
+          for text in \
+            'arch: [amd64, arm64]' \
+            'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
+            'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
+            '.platform.os? == $os' \
+            '.platform.architecture? == $arch' \
+            'vnd.docker.reference.type' \
+            'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}' \
+            'subject-digest: ${{ steps.resolve.outputs.image_digest }}' \
+            "exit-code: '0'" \
+            'test "$mirror_digest" = "$IMAGE_DIGEST"' \
+            'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"' \
+            'cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"' \
+            'test "$canonical_digest" = "$mirror_digest"'; do
+            grep -F -- "$text" "$workflow" >/dev/null
+          done
+
+          if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.build\.outputs\.digest' "$workflow"; then
+            echo 'scan or attestation uses a BuildKit index digest' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*continue-on-error:|[|][|][[:space:]]*true' "$workflow"; then
+            echo 'publication workflow suppresses operational failures' >&2
+            exit 1
+          fi
+          if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
+            echo 'publication workflow builds separately for both registries' >&2
             exit 1
           fi
 
+          script=.github/scripts/reconcile-public-tags.sh
+          recovery=.github/workflows/reconcile-public-tags.yml
+          grep -F 'name: Promote public references with Docker Hub first and GHCR last' "$workflow" >/dev/null
+          grep -F 'name: Reconcile/repair public references' "$workflow" >/dev/null
+          grep -F "if: always() && needs.publish-index.result == 'success'" "$workflow" >/dev/null
+          grep -F 'canonical_digest: ${{ steps.staging.outputs.canonical_digest }}' "$workflow" >/dev/null
+          grep -F 'mirror_digest: ${{ steps.staging.outputs.mirror_digest }}' "$workflow" >/dev/null
+          test "$(grep -c -F 'run: .github/scripts/reconcile-public-tags.sh' "$workflow")" -eq 2
+          grep -F 'RECONCILE_ATTEMPTS' "$script" >/dev/null
+          grep -F 'retry ensure_reference_once' "$script" >/dev/null
+          grep -F 'ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"' "$script" >/dev/null
+          grep -F 'ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"' "$script" >/dev/null
+          grep -F 'workflow_run:' "$recovery" >/dev/null
+          grep -F 'workflow_dispatch:' "$recovery" >/dev/null
+          grep -F 'group: publish-${{ needs.resolve.outputs.image }}' "$recovery" >/dev/null
+          grep -F 'cancel-in-progress: false' "$recovery" >/dev/null
+          grep -F 'run: .github/scripts/reconcile-public-tags.sh' "$recovery" >/dev/null
+
+          dockerhub_sha_line=$(grep -n -F 'ensure_reference "$DOCKERHUB_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)
+          ghcr_sha_line=$(grep -n -F 'ensure_reference "$GHCR_IMAGE" "$sha_tag" "$target"' "$script" | cut -d: -f1)
+          dockerhub_latest_line=$(grep -n -F 'ensure_reference "$DOCKERHUB_IMAGE" latest "$target"' "$script" | cut -d: -f1)
+          ghcr_latest_line=$(grep -n -F 'ensure_reference "$GHCR_IMAGE" latest "$target"' "$script" | cut -d: -f1)
+          test "$dockerhub_sha_line" -lt "$ghcr_sha_line"
+          test "$ghcr_sha_line" -lt "$dockerhub_latest_line"
+          test "$dockerhub_latest_line" -lt "$ghcr_latest_line"
+
+          fixture=$(mktemp)
+          trap 'rm -f "$fixture"' EXIT
+          cat > "$fixture" <<'JSON'
+          {"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
+            {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:image","platform":{"os":"linux","architecture":"amd64"}},
+            {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:attestation","platform":{"os":"unknown","architecture":"unknown"},"annotations":{"vnd.docker.reference.type":"attestation-manifest"}}
+          ]}
+          JSON
+          digest=$(jq -er \
+            --arg os linux --arg arch amd64 --arg build_digest sha256:build \
+            '
+              if (.manifests? | type) == "array" then
+                [.manifests[] | select(
+                  .platform.os? == $os and
+                  .platform.architecture? == $arch and
+                  (.mediaType? == "application/vnd.oci.image.manifest.v1+json" or
+                   .mediaType? == "application/vnd.docker.distribution.manifest.v2+json") and
+                  .annotations["vnd.docker.reference.type"]? != "attestation-manifest"
+                )]
+                | if length == 1 then .[0].digest
+                  else error("expected exactly one platform image manifest")
+                  end
+              elif (.mediaType? == "application/vnd.oci.image.manifest.v1+json" or
+                    .mediaType? == "application/vnd.docker.distribution.manifest.v2+json") then
+                $build_digest
+              else error("expected an OCI index or image manifest") end
+            ' "$fixture")
+          test "$digest" = sha256:image
+          if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo 'malformed fixture digest passed validation' >&2
+            exit 1
+          fi
+          valid_digest=sha256:$(printf '%064d' 1)
+          [[ "$valid_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+      - name: Validate cross-registry promotion repair fixtures
+        run: .github/scripts/test-reconcile-public-tags.sh
+
+      - name: Validate action digest pins
+        run: |
+          set -Eeuo pipefail
+          while IFS= read -r use; do
+            case "$use" in
+              ./*) continue ;;
+            esac
+            if ! [[ "$use" =~ ^[^@]+@[0-9a-f]{40}$ ]]; then
+              echo "unpinned action: $use" >&2
+              exit 1
+            fi
+          done < <(sed -nE 's/^[[:space:]]*- uses: ([^ #]+).*/\1/p' .github/workflows/*.yml)
+
+      - name: Validate Renovate merge policy
+        run: |
+          set -Eeuo pipefail
+          jq -e '
+            .platformAutomerge == false and
+            .prHourlyLimit == 2 and
+            .prConcurrentLimit == 5 and
+            any(.packageRules[];
+              .matchManagers == ["github-actions"] and
+              .groupName == "GitHub Actions") and
+            any(.packageRules[];
+              .automerge == false and
+              .matchManagers == ["dockerfile"] and
+              ((.matchPackageNames | sort) == ([
+                "golang",
+                "golangci/golangci-lint",
+                "library/wordpress",
+                "serversideup/php",
+                "sqlc/sqlc",
+                "wordpress"
+              ] | sort)))
+          ' renovate.json >/dev/null
+
+      - name: Validate vulnerability documentation policy
+        run: |
+          set -Eeuo pipefail
+          grep -F 'Vulnerability findings are informational' .github/vulnerability-policy.md >/dev/null
+          grep -F 'operational failures remain fatal' .github/vulnerability-policy.md >/dev/null
+
   secret-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -128,59 +194,42 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        container: [serversideup, pkm-mcp, openclaw, fava, dae, mapservice-build, wordpress-frankenphp]
-    
+        image: [dae, fava, mapservice-build, wordpress-frankenphp]
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Check if Dockerfile changed
-        id: check_changes
+      - name: Check image changes
+        id: changes
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
             changed:
-              - '${{ matrix.container }}/**'
+              - '${{ matrix.image }}/**'
+              - '.github/workflows/${{ matrix.image }}.yml'
+              - '.github/workflows/reusable-publish-image.yml'
+              - '.github/workflows/reconcile-public-tags.yml'
+              - '.github/scripts/**'
+              - '.github/workflows/ci.yml'
 
-      - name: Set up Docker Buildx
-        if: steps.check_changes.outputs.changed == 'true'
+      - if: steps.changes.outputs.changed == 'true' && matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - if: steps.changes.outputs.changed == 'true'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
 
-      - name: Build and Test ${{ matrix.container }}
-        if: steps.check_changes.outputs.changed == 'true'
+      - name: Build and test image
+        if: steps.changes.outputs.changed == 'true'
         run: |
-          echo "Building ${{ matrix.container }}..."
-          docker build --platform linux/amd64 -t test-${{ matrix.container }} ./${{ matrix.container }}
-          
-          echo "Running custom tests for ${{ matrix.container }}..."
-
-          if [ -f "./${{ matrix.container }}/test.sh" ]; then
-            chmod +x ./${{ matrix.container }}/test.sh
-            ./${{ matrix.container }}/test.sh test-${{ matrix.container }}
-          else
-            echo "No custom test script found for ${{ matrix.container }}. Performing basic sanity check."
-            docker run --rm test-${{ matrix.container }} /bin/true
-          fi
-
-  wordpress-frankenphp-arm64:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-      - name: Build and smoke test linux/arm64 WordPress base
-        run: |
-          docker buildx build --platform linux/arm64 --load \
-            -t test-wordpress-frankenphp-arm64 wordpress-frankenphp
-          docker run --rm --platform linux/arm64 \
-            --entrypoint sh test-wordpress-frankenphp-arm64 -s <<'CHECK'
-          set -eu
-          php -v | grep -F 'PHP 8.5'
-          php -r 'require "/var/www/html/public/wp-includes/version.php"; exit($wp_version === "7.1" ? 0 : 1);'
-          test "$(id -u)" -eq 33
-          test -d /var/www/html/public/wp-content/uploads
-          test -d /var/www/html/public/wp-content/cache
-          CHECK
+          set -Eeuo pipefail
+          tag="test-${{ matrix.image }}-${{ matrix.arch }}"
+          docker buildx build \
+            --platform "linux/${{ matrix.arch }}" \
+            --load \
+            --tag "$tag" \
+            "./${{ matrix.image }}"
+          "./${{ matrix.image }}/test.sh" "$tag"

@@ -143,7 +143,6 @@ RUN set -eux; \
     test -s /opt/stormlib/lib/libstorm.so
 
 FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
-ARG TARGETPLATFORM
 ARG VCS_REF=unknown
 ARG STORMLIB_VERSION
 ARG STORMLIB_COMMIT
@@ -164,7 +163,6 @@ ENV PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
     GOPATH=/go
 
 RUN set -eux; \
-    test "$TARGETPLATFORM" = linux/amd64; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates \

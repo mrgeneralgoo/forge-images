@@ -1,4 +1,5 @@
 FROM python:3.14-slim@sha256:cae66f2ef0ec51a9891263eeee7f987dacf0a9879e8aa9353d5606e0530619a5
+ARG VCS_REF=unknown
 
 # Fava + fava-dashboards served by gunicorn. See fava_wsgi.py for why gunicorn
 # (multi-process → real multi-core for the CPU-bound BQL queries dashboards
@@ -24,6 +25,11 @@ ENV PYTHONUNBUFFERED=1 \
     FAVA_PREFIX=/fava
 
 EXPOSE 5000
+
+LABEL org.opencontainers.image.title="Fava" \
+      org.opencontainers.image.description="Fava and fava-dashboards served by preloaded multi-process Gunicorn." \
+      org.opencontainers.image.source="https://github.com/mrgeneralgoo/forge-images" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 # --preload: parse the ledger once in the master, workers inherit it via CoW.
 # --timeout 120: a heavy BQL query on a slow board can take several seconds.

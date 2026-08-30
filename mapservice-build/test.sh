@@ -9,93 +9,6 @@ fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 dockerfile=$script_dir/Dockerfile
-workflow=$script_dir/../.github/workflows/mapservice-build.yml
-
-for text in \
-  'security-events: write' \
-  'BUILD_DIGEST: ${{ steps.build.outputs.digest }}' \
-  'outputs: type=image,name=${{ env.GHCR_IMAGE }},push-by-digest=true,name-canonical=true,push=true' \
-  'docker buildx imagetools inspect "$GHCR_IMAGE@$BUILD_DIGEST" --raw' \
-  'if (.manifests? | type) == "array" then' \
-  '.platform.os? == $os' \
-  '.platform.architecture? == $arch' \
-  'else error("expected exactly one platform image manifest")' \
-  'application/vnd.oci.image.manifest.v1+json' \
-  'vnd.docker.reference.type' \
-  'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}' \
-  'subject-digest: ${{ steps.resolve.outputs.image_digest }}' \
-  'IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}' \
-  "--format '{{json .SBOM.SPDX}}'"; do
-  grep -F -- "$text" "$workflow" >/dev/null
-done
-if grep -Eq 'image-ref:.*steps\.build\.outputs\.digest|subject-digest:.*steps\.build\.outputs\.digest' "$workflow"; then
-  echo "scan or attestation still uses the BuildKit index digest" >&2
-  exit 1
-fi
-if grep -Fq "exit-code: '1'" "$workflow"; then
-  echo "Trivy vulnerability findings still block publication" >&2
-  exit 1
-fi
-if grep -Eq '^[[:space:]]*continue-on-error:|[|][|][[:space:]]*true' "$workflow"; then
-  echo "workflow suppresses operational failures" >&2
-  exit 1
-fi
-if grep -Fq 'type=image,name=${{ env.DOCKERHUB_IMAGE }}' "$workflow"; then
-  echo "build step has multiple registry exporters with different output digests" >&2
-  exit 1
-fi
-if grep -Eq '^[[:space:]]+DIGEST:' "$workflow"; then
-  echo "workflow uses the ambiguous DIGEST variable" >&2
-  exit 1
-fi
-assert_next_step() {
-  local first=$1 second=$2
-  awk -v first="$first" -v second="$second" '
-    $0 == "      - name: " first { seen=1; next }
-    seen && /^      - (name|uses): / { exit($0 == "      - name: " second ? 0 : 1) }
-    END { if (!seen) exit 1 }
-  ' "$workflow"
-}
-assert_next_step 'Build and push canonical image by digest' 'Resolve canonical platform image manifest digest'
-assert_next_step 'Attest build provenance on canonical registry' 'Mirror scanned image to Docker Hub staging'
-step_contains() {
-  local step=$1 needle=$2
-  awk -v step="$step" -v needle="$needle" '
-    $0 == "      - name: " step { in_step=1; next }
-    in_step && /^      - name: / { exit(found ? 0 : 1) }
-    in_step && index($0, needle) { found=1 }
-    END { if (!found) exit 1 }
-  ' "$workflow"
-}
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'image-ref: ${{ env.GHCR_IMAGE }}@${{ steps.resolve.outputs.image_digest }}'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'format: sarif'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'output: trivy-results.sarif'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' "exit-code: '0'"
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'ignore-unfixed: false'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'vuln-type: os,library'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'severity: CRITICAL,HIGH'
-step_contains 'Report HIGH and CRITICAL vulnerabilities' 'scanners: vuln'
-step_contains 'Upload vulnerability results' 'github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938'
-step_contains 'Upload vulnerability results' 'sarif_file: trivy-results.sarif'
-step_contains 'Extract attached SPDX SBOM' 'BUILD_DIGEST: ${{ steps.build.outputs.digest }}'
-step_contains 'Extract attached SPDX SBOM' '"$GHCR_IMAGE@$BUILD_DIGEST"'
-step_contains 'Extract attached SPDX SBOM' "--format '{{json .SBOM.SPDX}}'"
-step_contains 'Attest SPDX SBOM on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
-step_contains 'Attest build provenance on canonical registry' 'subject-digest: ${{ steps.resolve.outputs.image_digest }}'
-step_contains 'Mirror scanned image to Docker Hub staging' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
-step_contains 'Mirror scanned image to Docker Hub staging' '--tag "$DOCKERHUB_IMAGE:$staging_tag"'
-step_contains 'Mirror scanned image to Docker Hub staging' '--prefer-index=false'
-step_contains 'Mirror scanned image to Docker Hub staging' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
-step_contains 'Sign canonical and mirror digests' 'IMAGE_DIGEST: ${{ steps.resolve.outputs.image_digest }}'
-step_contains 'Sign canonical and mirror digests' 'cosign sign --yes "$GHCR_IMAGE@$IMAGE_DIGEST"'
-step_contains 'Sign canonical and mirror digests' 'cosign sign --yes "$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
-step_contains 'Create immutable release references' '"$GHCR_IMAGE@$IMAGE_DIGEST"'
-step_contains 'Create immutable release references' '--prefer-index=false'
-step_contains 'Create immutable release references' 'test "$release_digest" = "$IMAGE_DIGEST"'
-step_contains 'Create immutable release references' 'test "$mirror_digest" = "$IMAGE_DIGEST"'
-step_contains 'Update mutable latest references after scan and signing' '"$DOCKERHUB_IMAGE@$IMAGE_DIGEST"'
-step_contains 'Update mutable latest references after scan and signing' '--prefer-index=false'
 
 pin() {
   awk -v key="$1" '$1 == "ARG" && index($2, key "=") == 1 { sub("^[^=]+=", "", $2); print $2; exit }' "$dockerfile"
@@ -209,61 +122,6 @@ for url in \
   grep -F "$url" "$dockerfile" >/dev/null
 done
 
-check_image_manifest_resolution() {
-  local fixture jq_filter duplicate_status
-  fixture=$(mktemp -d)
-  trap 'rm -rf "$fixture"' RETURN
-  jq_filter='
-    if (.manifests? | type) == "array" then
-      [
-        .manifests[]
-        | select(
-            .platform.os? == $os
-            and .platform.architecture? == $arch
-            and (
-              .mediaType? == "application/vnd.oci.image.manifest.v1+json"
-              or .mediaType? == "application/vnd.docker.distribution.manifest.v2+json"
-            )
-            and .annotations["vnd.docker.reference.type"]? != "attestation-manifest"
-          )
-      ]
-      | if length == 1 then .[0].digest
-        else error("expected exactly one platform image manifest")
-        end
-    elif (
-      .mediaType? == "application/vnd.oci.image.manifest.v1+json"
-      or .mediaType? == "application/vnd.docker.distribution.manifest.v2+json"
-    ) then
-      $build_digest
-    else
-      error("expected an OCI index or image manifest")
-    end
-  '
-  cat > "$fixture/index.json" <<'JSON'
-{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
-  {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:image","platform":{"os":"linux","architecture":"amd64"}},
-  {"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:attestation","platform":{"os":"unknown","architecture":"unknown"},"annotations":{"vnd.docker.reference.type":"attestation-manifest"}},
-  {"mediaType":"application/vnd.in-toto+json","digest":"sha256:attestation-target","platform":{"os":"linux","architecture":"amd64"},"annotations":{"vnd.docker.reference.type":"attestation-manifest"}}
-]}
-JSON
-  test "$(jq -er --arg os linux --arg arch amd64 --arg build_digest sha256:build "$jq_filter" "$fixture/index.json")" = sha256:image
-  jq '.manifests[0].mediaType = "application/vnd.docker.distribution.manifest.v2+json"' \
-    "$fixture/index.json" > "$fixture/docker-index.json"
-  test "$(jq -er --arg os linux --arg arch amd64 --arg build_digest sha256:build "$jq_filter" "$fixture/docker-index.json")" = sha256:image
-
-  jq '.manifests += [.manifests[0]]' "$fixture/index.json" > "$fixture/duplicate.json"
-  set +e
-  jq -er --arg os linux --arg arch amd64 --arg build_digest sha256:build "$jq_filter" "$fixture/duplicate.json" >/dev/null 2>&1
-  duplicate_status=$?
-  set -e
-  test "$duplicate_status" -ne 0
-
-  printf '%s\n' '{"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}' > "$fixture/image.json"
-  test "$(jq -er --arg os linux --arg arch amd64 --arg build_digest sha256:build "$jq_filter" "$fixture/image.json")" = sha256:build
-  rm -rf "$fixture"
-  trap - RETURN
-}
-check_image_manifest_resolution
 for checksum in \
   "$expected_go_sha" \
   "$expected_sqlc_sha" \
@@ -310,7 +168,10 @@ for mode in exit term; do
 done
 
 expected_stormlib_version_number=${expected_stormlib_version#v}
+expected_arch=$(docker image inspect "$image" --format '{{.Architecture}}')
+case "$expected_arch" in amd64|arm64) ;; *) echo "unexpected image architecture: $expected_arch" >&2; exit 1;; esac
 docker run --rm \
+  -e EXPECTED_ARCH="$expected_arch" \
   -e EXPECTED_STORMLIB_VERSION="$expected_stormlib_version_number" \
   -e EXPECTED_STORMLIB_COMMIT="$expected_stormlib_commit" \
   -e EXPECTED_STORMLIB_SHA="$expected_stormlib_sha" \
@@ -328,7 +189,8 @@ set -eu
 
 export DEBIAN_FRONTEND=noninteractive
 
-go version | grep -F "go$EXPECTED_GO_VERSION linux/amd64"
+go version | grep -F "go$EXPECTED_GO_VERSION linux/$EXPECTED_ARCH"
+test "$(dpkg --print-architecture)" = "$EXPECTED_ARCH"
 sqlc version | grep -F "$EXPECTED_SQLC_VERSION"
 golangci-lint --version | grep -F "${EXPECTED_GOLANGCI_VERSION#v}"
 git --version
