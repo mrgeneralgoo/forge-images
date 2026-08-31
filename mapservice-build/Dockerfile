@@ -18,7 +18,7 @@ ARG GOLANGCI_ARCHIVE_SHA256=ef31ff6f9c278cbbf6e813c1d61eb683ee8a1f79050ce259d08a
 FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537 AS sqlc
 FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d AS golangci
 
-FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS go-distribution
+FROM golang:1.27.0-trixie@sha256:df98008ecd2b0ecc9f0a94d1b07e3564a9c92b555369b33d9b5f60d0765b2db7 AS go-distribution
 
 FROM go-distribution AS upstream-source
 ARG STORMLIB_VERSION
