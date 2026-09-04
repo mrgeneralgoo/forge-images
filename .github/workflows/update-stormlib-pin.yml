@@ -1,0 +1,271 @@
+name: Update StormLib pin
+
+# StormLib is built from source, so a release bump has to move three pins at
+# once: the version, the source commit and the archive checksum. Only the
+# version is discoverable from the tag, and the hosted Renovate app cannot run
+# commands, so this workflow resolves the other two by running the repository's
+# transactional pin updater.
+#
+# The pull request is opened with GITHUB_TOKEN, which by design does not trigger
+# workflow runs, so it carries no checks of its own. This workflow therefore runs
+# the validation itself: the updater builds and tests on amd64, and a second job
+# rebuilds and retests the pushed branch natively on arm64. StormLib is compiled
+# C/C++, so a release can break one architecture and not the other -- claiming
+# "validated" off a single platform would be false.
+#
+# The branch is pushed before validation completes so arm64 checks out exactly
+# the commit that would be merged. A candidate that fails is deleted again.
+#
+# What this does NOT reproduce: ci.yml under pull_request validates GitHub's
+# synthetic merge ref, whereas these jobs validate the candidate head against the
+# main it was branched from. The gap is closed by refusing to open the pull
+# request if main moved during validation -- the run starts over instead, so the
+# tested tree and the merged tree stay identical.
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-stormlib-pin
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.versions.outputs.needed }}
+      current: ${{ steps.versions.outputs.current }}
+      latest: ${{ steps.versions.outputs.latest }}
+      branch: ${{ steps.versions.outputs.branch }}
+      base_sha: ${{ steps.versions.outputs.base_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve current and upstream StormLib versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          dockerfile=mapservice-build/Dockerfile
+
+          current=$(awk '$1 == "ARG" && index($2, "STORMLIB_VERSION=") == 1 {
+            sub("^[^=]+=", "", $2); print $2; exit
+          }' "$dockerfile")
+          if ! [[ "$current" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "unreadable StormLib pin in $dockerfile: ${current:-<empty>}" >&2
+            exit 1
+          fi
+
+          # Only release tags, sorted by version rather than lexically so v9.10
+          # does not sort below v9.9. An empty result fails the guard below
+          # rather than silently reporting "up to date".
+          latest=$(git ls-remote --tags --refs \
+              https://github.com/ladislav-zezula/StormLib.git 'v*' \
+            | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+            | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+            | sort -V \
+            | tail -1)
+          if ! [[ "$latest" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "could not resolve an upstream StormLib release tag" >&2
+            exit 1
+          fi
+
+          branch="stormlib/$latest"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          # The commit validation is performed against. open-pull-request refuses
+          # to proceed if main has moved past it, so the tree that was tested is
+          # the tree that gets merged.
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)
+          if [[ "$current" == "$latest" || "$newest" != "$latest" ]]; then
+            echo "StormLib is up to date at $current"
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Only a pull request from a branch in this repository, targeting main,
+          # counts as "already handled". --head matches on branch name alone, so
+          # a fork could otherwise park a PR on the predictable branch name and
+          # stall this automation; --base keeps a PR aimed at some other branch
+          # from doing the same permanently.
+          open=$(gh pr list --head "$branch" --base main --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $branch is already open"
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "StormLib $current -> $latest"
+          echo 'needed=true' >> "$GITHUB_OUTPUT"
+
+  prepare:
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Update pins, build and test on amd64
+        env:
+          LATEST: ${{ needs.resolve.outputs.latest }}
+          STORMLIB_UPDATE_TEST_PLATFORM: linux/amd64
+        run: |
+          set -Eeuo pipefail
+          # The updater resolves the commit and checksum, verifies the version
+          # string inside the archive, rewrites the Dockerfile atomically, then
+          # builds and runs test.sh. It restores the original Dockerfile if any
+          # of that fails.
+          bash mapservice-build/update-stormlib-pin.sh "$LATEST"
+
+      - name: Push the candidate branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          LATEST: ${{ needs.resolve.outputs.latest }}
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- mapservice-build/Dockerfile; then
+            echo 'updater reported success but left the Dockerfile unchanged' >&2
+            exit 1
+          fi
+
+          # resolve checked this up to an hour ago; re-check immediately before
+          # the force push so a pull request opened during the build is not
+          # overwritten.
+          open=$(gh pr list --head "$BRANCH" --base main --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $BRANCH was opened while this run was building" >&2
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git add mapservice-build/Dockerfile
+          git commit -m "build(deps): update StormLib to ${LATEST}
+
+          Resolved by .github/workflows/update-stormlib-pin.yml through
+          mapservice-build/update-stormlib-pin.sh, which moves the version,
+          source commit and archive checksum together."
+          # A leftover branch from an earlier run that failed after pushing is
+          # replaced rather than inherited: resolve already established that no
+          # pull request of ours is open for it, so nothing is being discarded.
+          git push --force origin "$BRANCH"
+
+  verify-arm64:
+    needs: [resolve, prepare]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.branch }}
+
+      - name: Build and test the candidate natively on arm64
+        run: |
+          set -Eeuo pipefail
+          image=stormlib-update-arm64
+          docker build --platform linux/arm64 -t "$image" mapservice-build
+          ./mapservice-build/test.sh "$image"
+
+  open-pull-request:
+    needs: [resolve, prepare, verify-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          CURRENT: ${{ needs.resolve.outputs.current }}
+          LATEST: ${{ needs.resolve.outputs.latest }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          # Both builds validated the candidate against the main it was branched
+          # from. Unlike a pull_request run of ci.yml there is no synthetic merge
+          # ref here, so if main has moved the validated tree is no longer the
+          # tree that would be merged. Fail instead: the branch is discarded and
+          # the next scheduled run rebuilds against the new main.
+          current_main=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')
+          if [[ "$current_main" != "$BASE_SHA" ]]; then
+            echo "main advanced from ${BASE_SHA} to ${current_main} during validation" >&2
+            echo 'the validated tree is not what would be merged; discarding this candidate' >&2
+            exit 1
+          fi
+
+          # Re-check rather than assume: this job could be retried after a PR
+          # was already created by an earlier attempt.
+          open=$(gh pr list --head "$BRANCH" --base main --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $BRANCH already exists"
+            exit 0
+          fi
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "build(deps): update StormLib to ${LATEST}" \
+            --body "Updates StormLib from \`${CURRENT}\` to \`${LATEST}\`.
+
+          The version, source commit and archive checksum move together;
+          \`mapservice-build/update-stormlib-pin.sh\` resolves the last two from
+          the upstream tag and verifies the version string inside the downloaded
+          archive before rewriting anything.
+
+          **Validated on both architectures.** \`mapservice-build\` was built and
+          \`mapservice-build/test.sh\` was run against it on amd64 and again
+          natively on arm64 before this pull request was opened. StormLib is
+          compiled from source, so both platforms are checked rather than assumed
+          from one.
+
+          This pull request was opened with \`GITHUB_TOKEN\`, which by design does
+          not trigger workflow runs, so it has no checks of its own. Review the
+          workflow log, then merge.
+
+          Run: ${RUN_URL}"
+
+  discard-failed-candidate:
+    needs: [resolve, prepare, verify-arm64, open-pull-request]
+    if: failure() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Delete the unvalidated branch
+        env:
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+        run: |
+          set -Eeuo pipefail
+          # Validation failed after the branch was pushed. Remove it so the next
+          # scheduled run starts clean instead of retrying against a branch that
+          # is already known to be broken.
+          git push origin --delete "$BRANCH" || true

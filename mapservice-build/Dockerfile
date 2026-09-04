@@ -10,7 +10,7 @@ ARG STORMLIB_ARCHIVE_SHA256=f584f35edf9cb7f5e6adc65ee467ddfcf5f5b2d06445a0b6a3f2
 # digest literal appears exactly once, so a Renovate digest bump is a one-line
 # change with nothing else to keep in sync.
 ARG GO_REF=golang:trixie@sha256:9baa6b4187bbb98d240372a8a235ac0bb6b5ddd52bba1431dc2f7c0705862728
-ARG SQLC_REF=sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
+ARG SQLC_REF=sqlc/sqlc:latest@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
 ARG DEBIAN_REF=debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 FROM ${SQLC_REF} AS sqlc

@@ -105,7 +105,11 @@ esac
 
 command -v docker >/dev/null
 test_image=${STORMLIB_UPDATE_TEST_IMAGE:-forge-mapservice-build:stormlib-update}
-docker build --platform linux/amd64 -t "$test_image" "$script_dir"
+# StormLib is compiled from source, so a release can break one architecture and
+# not the other. CI overrides this to validate each supported platform on its
+# own native runner instead of under emulation.
+test_platform=${STORMLIB_UPDATE_TEST_PLATFORM:-linux/amd64}
+docker build --platform "$test_platform" -t "$test_image" "$script_dir"
 "$script_dir/test.sh" "$test_image"
 
 rollback=0
