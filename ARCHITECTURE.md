@@ -311,6 +311,17 @@ without a demonstrated consumer requirement.
   human. A new upstream version can change behaviour in ways a digest refresh
   of the same tag cannot, and for source-built components it also needs the
   commit and checksum pins updated in the same change.
+- Accepted risk: because these images track unbounded floating tags, a digest
+  update can itself carry a major upstream jump — a new Go, WordPress or PHP
+  release arrives as a changed checksum on the same tag, merges automatically
+  and publishes. `test.sh` proves the image builds, boots and serves; it does
+  not prove a consumer still compiles or runs against the new version, and it
+  deliberately does not assert versions. This is a deliberate trade for keeping
+  security updates flowing without human latency: consumers pin these images by
+  digest and gate their own upgrades. If that stops being acceptable for a given
+  image, narrow its tag to a version channel (`golang:1.27-trixie`,
+  `wordpress:7-php8.3-apache`) — digest updates stay automatic within the
+  channel, and crossing it becomes a deliberate one-line change.
 - Every Dockerfile accepts `ARG VCS_REF=unknown` and records
   `org.opencontainers.image.source` and
   `org.opencontainers.image.revision` labels.
