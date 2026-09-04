@@ -53,6 +53,11 @@ grep -Fxq 'FROM ${GO_REF} AS go-distribution' "$dockerfile" ||
   fail 'go-distribution stage does not build from ${GO_REF}'
 grep -Fxq 'FROM ${DEBIAN_REF}' "$dockerfile" ||
   fail 'final stage does not build from ${DEBIAN_REF}'
+# StormLib must be compiled inside the same image the runtime uses. GO_REF and
+# DEBIAN_REF are independent pins, so building in the Go image could link the
+# shared object against a newer glibc than the runtime ships.
+grep -Fxq 'FROM ${DEBIAN_REF} AS stormlib-builder' "$dockerfile" ||
+  fail 'stormlib-builder does not build from ${DEBIAN_REF}'
 
 for text in \
   'COPY --from=go-distribution /usr/local/go/ /usr/local/go/' \
@@ -177,12 +182,18 @@ package main
 #cgo LDFLAGS: -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lstorm
 #include <StormLib.h>
 static const char *stormVersion(void) { return STORMLIB_VERSION_STRING; }
+// Calling an exported symbol proves the shared object actually links and loads
+// at runtime. Reading the header macro alone only proves the headers are there.
+static int stormCallExport(void) { SFileSetLocale(0); return 1; }
 */
 import "C"
 
 func main() {
 	if C.GoString(C.stormVersion())[0] != '9' {
 		panic("unexpected StormLib version")
+	}
+	if C.stormCallExport() != 1 {
+		panic("StormLib exported call failed")
 	}
 }
 EOF

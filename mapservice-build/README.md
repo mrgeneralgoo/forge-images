@@ -1,8 +1,11 @@
 # mapservice-build
 
 A pinned, minimal Go and CGO build environment for Mapservice development. It
-contains the Go toolchain, sqlc, golangci-lint, and source-built StormLib without
-copying any application source.
+contains the Go toolchain, sqlc, and source-built StormLib without copying any
+application source.
+
+> **Breaking change:** `golangci-lint` was removed from this image. Consumers
+> that lint inside it must install it themselves or pin an earlier digest.
 
 ## Images
 
@@ -74,8 +77,11 @@ credentials.
 
 ## StormLib updates
 
-Renovate tracks the StormLib release tag and invokes the transactional pin
-updater:
+StormLib needs three pins updated together — version, source commit and archive
+checksum — and only the version is discoverable from the release tag. Renovate
+on the hosted app cannot run commands, so it reports new StormLib tags on the
+dependency dashboard and does not open a pull request on its own
+(`dependencyDashboardApproval`). A maintainer runs the transactional updater:
 
 ```bash
 bash mapservice-build/update-stormlib-pin.sh v9.41
@@ -93,5 +99,9 @@ docker buildx build --platform linux/amd64 --load \
 ./mapservice-build/test.sh test-mapservice-build
 ```
 
-The smoke test verifies tool versions, package minimization, license/provenance
-artifacts, StormLib linkage, CGO compilation, and Go module proxy fallback.
+The smoke test verifies that the pins in the Dockerfile match the built image,
+that each stage builds from its authoritative `ARG`, package minimization,
+license files, StormLib linkage and a real call into an exported StormLib
+symbol, CGO compilation, and Go module proxy fallback. Tool versions are
+reported rather than asserted, except StormLib, which is compiled from a pinned
+source commit and so must match its pin.

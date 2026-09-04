@@ -59,7 +59,8 @@
       "automerge": false,
       "matchManagers": [
         "custom.regex"
-      ]
+      ],
+      "dependencyDashboardApproval": true
     },
     {
       "matchManagers": [

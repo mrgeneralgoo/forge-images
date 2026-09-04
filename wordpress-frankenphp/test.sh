@@ -78,7 +78,16 @@ docker run --rm --entrypoint sh "$image" -s <<'CHECK'
 set -eu
 
 php -v >/dev/null || { echo 'php is not runnable' >&2; exit 1; }
+command -v frankenphp >/dev/null || { echo 'frankenphp is missing from the runtime' >&2; exit 1; }
 php -r 'require "/var/www/html/public/wp-includes/version.php"; echo "WordPress $wp_version on PHP " . PHP_VERSION . "\n";'
+
+# WordPress and the PHP runtime are two independently floating references, so
+# they can drift into a combination WordPress itself refuses to run on.
+php -r 'require "/var/www/html/public/wp-includes/version.php";
+  if (version_compare(PHP_VERSION, $required_php_version, "<")) {
+    fwrite(STDERR, "PHP " . PHP_VERSION . " is below WordPress requirement " . $required_php_version . "\n");
+    exit(1);
+  }'
 
 modules=$(php -m)
 for extension in igbinary zstd lzf mysqli exif imagick gd intl timezonedb bcmath shmop redis; do
@@ -122,5 +131,37 @@ if find /var/www/html/public -xdev -type f \( \
   exit 1
 fi
 CHECK
+
+# Everything above runs through `sh` and never exercises the image's own
+# entrypoint. Start the container the way a consumer would and require a real
+# WordPress response over HTTP, so a drifting FrankenPHP runtime that breaks the
+# entrypoint, the Caddy config or the document root cannot pass silently.
+container="wordpress-smoke-$$"
+cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+docker run -d --name "$container" -p 127.0.0.1::8080 "$image" >/dev/null
+host_port=$(docker port "$container" 8080/tcp | head -1 | sed 's/.*://')
+[[ -n "$host_port" ]] || fail 'container did not publish the HTTP port'
+
+served=
+for _ in $(seq 1 60); do
+  body=$(curl -fsSL "http://127.0.0.1:${host_port}/" 2>/dev/null || true)
+  if [[ -n "$body" ]]; then
+    served=$body
+    break
+  fi
+  sleep 1
+done
+
+if [[ -z "$served" ]]; then
+  docker logs "$container" >&2 || true
+  fail 'image did not serve HTTP through its own entrypoint'
+fi
+grep -qi 'wordpress' <<<"$served" ||
+  fail 'HTTP response did not come from WordPress'
+
+cleanup
+trap - EXIT
 
 echo "wordpress-frankenphp checks passed: $image"

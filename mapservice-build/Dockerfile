@@ -17,7 +17,12 @@ FROM ${SQLC_REF} AS sqlc
 
 FROM ${GO_REF} AS go-distribution
 
-FROM go-distribution AS stormlib-source
+# StormLib is fetched and compiled inside the very image the runtime stage uses,
+# not merely inside another image with the same Debian codename. GO_REF and
+# DEBIAN_REF are independent pins that Renovate updates separately, so building
+# in the Go image could link the shared object against a newer glibc than the
+# runtime actually ships.
+FROM ${DEBIAN_REF} AS stormlib-builder
 ARG STORMLIB_VERSION
 ARG STORMLIB_COMMIT
 ARG STORMLIB_ARCHIVE_SHA256
@@ -25,7 +30,18 @@ ARG STORMLIB_ARCHIVE_SHA256
 RUN set -eux; \
     printf '%s\n' "${STORMLIB_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; \
     printf '%s\n' "${STORMLIB_ARCHIVE_SHA256}" | grep -Eq '^[0-9a-f]{64}$'; \
-    mkdir -p /tmp/upstream/stormlib; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates \
+      cmake \
+      curl \
+      g++ \
+      gcc \
+      libbz2-dev \
+      make \
+      zlib1g-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    mkdir -p /tmp/upstream/stormlib /tmp/stormlib-build; \
     archive=/tmp/stormlib.tar.gz; \
     curl --fail --silent --show-error --location --retry 3 \
       "https://codeload.github.com/ladislav-zezula/StormLib/tar.gz/${STORMLIB_COMMIT}" \
@@ -34,17 +50,8 @@ RUN set -eux; \
     tar --extract --gzip --file "${archive}" --strip-components=1 --directory /tmp/upstream/stormlib; \
     grep -Fq "STORMLIB_VERSION_STRING         \"${STORMLIB_VERSION#v}\"" /tmp/upstream/stormlib/src/StormLib.h; \
     test -s /tmp/upstream/stormlib/LICENSE; \
-    rm -f "${archive}"
-
-FROM go-distribution AS stormlib-builder
-
-COPY --from=stormlib-source /tmp/upstream/stormlib /tmp/stormlib
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends cmake; \
-    rm -rf /var/lib/apt/lists/*; \
-    mkdir -p /tmp/stormlib-build; \
-    cmake -S /tmp/stormlib -B /tmp/stormlib-build \
+    rm -f "${archive}"; \
+    cmake -S /tmp/upstream/stormlib -B /tmp/stormlib-build \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/stormlib \
       -DBUILD_SHARED_LIBS=ON \
@@ -86,7 +93,7 @@ COPY --from=stormlib-builder /opt/stormlib/ /usr/local/
 # image with no license file, so its MIT text is vendored in this repository.
 COPY --from=go-distribution /usr/local/go/LICENSE /usr/share/doc/go/LICENSE
 COPY --from=go-distribution /usr/local/go/PATENTS /usr/share/doc/go/PATENTS
-COPY --from=stormlib-source /tmp/upstream/stormlib/LICENSE /usr/share/doc/stormlib/LICENSE
+COPY --from=stormlib-builder /tmp/upstream/stormlib/LICENSE /usr/share/doc/stormlib/LICENSE
 COPY licenses/sqlc-LICENSE /usr/share/doc/sqlc/LICENSE
 
 USER root

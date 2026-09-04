@@ -72,8 +72,11 @@ docker buildx build --platform linux/amd64 --load \
 ./wordpress-frankenphp/test.sh test-wordpress-frankenphp
 ```
 
-The smoke test verifies that PHP and WordPress load, every curated extension is
-present, upstream digest labels match the Dockerfile pins, ownership is non-root,
-volumes are empty and writable, and no common secret files were baked in. It
-reports the PHP and WordPress versions but does not assert them, so an upstream
-release never turns a digest update red.
+The smoke test starts the container through its own entrypoint and requires a
+real WordPress response over HTTP, so a drifting FrankenPHP runtime that breaks
+the entrypoint, the Caddy config or the document root cannot pass. It also
+checks that every curated extension is present, that the PHP version satisfies
+WordPress's own `$required_php_version`, that the upstream digest labels match
+the Dockerfile pins, non-root ownership, empty writable volumes, and the absence
+of common secret files. PHP and WordPress versions are reported but not
+asserted, so an upstream release never turns a digest update red.
