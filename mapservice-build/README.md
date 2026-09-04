@@ -86,11 +86,17 @@ runs daily. It compares the pinned version against the newest upstream release
 tag and, when they differ, runs the transactional updater below, then opens a
 pull request.
 
-The pull request is already validated: the updater builds `mapservice-build` and
-runs `test.sh` against it before the branch is pushed, and restores the previous
-Dockerfile if anything fails. It is opened with `GITHUB_TOKEN`, which by design
-does not trigger workflow runs, so it carries no checks of its own — read the
-workflow log, then merge.
+The pull request is validated on both architectures before it is opened. The
+updater builds and runs `test.sh` on amd64 and restores the previous Dockerfile
+if anything fails; the workflow then pushes the candidate branch and rebuilds
+and retests it natively on `ubuntu-24.04-arm`. StormLib is compiled C/C++, so a
+release can break one architecture and not the other — validating only the
+platform the updater happens to run on would be misleading. A branch that fails
+arm64 validation is deleted rather than left behind.
+
+The pull request is opened with `GITHUB_TOKEN`, which by design does not trigger
+workflow runs, so it carries no checks of its own — read the workflow log, then
+merge.
 
 The same updater can be run by hand, which is also how a downgrade or a specific
 tag is applied:

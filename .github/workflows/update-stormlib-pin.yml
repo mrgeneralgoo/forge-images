@@ -6,11 +6,16 @@ name: Update StormLib pin
 # commands, so this workflow resolves the other two by running the repository's
 # transactional pin updater.
 #
-# The updater builds the image and runs mapservice-build/test.sh before it
-# accepts the new pins, so the change is already validated when the pull request
-# is opened. The pull request itself is created with GITHUB_TOKEN, which by
-# design does not trigger further workflow runs, so it carries no checks of its
-# own -- read this workflow's log, then merge.
+# The pull request is opened with GITHUB_TOKEN, which by design does not trigger
+# workflow runs, so it carries no checks of its own. That is why this workflow
+# runs the same validation ci.yml would: the updater builds and tests on amd64,
+# and a second job rebuilds and retests the pushed branch natively on arm64.
+# StormLib is compiled C/C++, so a release can break one architecture and not
+# the other -- claiming "validated" off a single platform would be false.
+#
+# The branch is pushed before validation completes so arm64 can check out
+# exactly what would be merged. If validation fails the branch is deleted again,
+# leaving no half-finished state behind.
 
 on:
   schedule:
@@ -25,17 +30,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update:
+  resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    permissions:
-      contents: write
-      pull-requests: write
+    timeout-minutes: 10
+    outputs:
+      needed: ${{ steps.versions.outputs.needed }}
+      current: ${{ steps.versions.outputs.current }}
+      latest: ${{ steps.versions.outputs.latest }}
+      branch: ${{ steps.versions.outputs.branch }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Resolve current and upstream StormLib versions
         id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
           dockerfile=mapservice-build/Dockerfile
@@ -48,8 +57,9 @@ jobs:
             exit 1
           fi
 
-          # Only annotated/lightweight release tags, sorted by version rather
-          # than lexically so v9.10 does not sort below v9.9.
+          # Only release tags, sorted by version rather than lexically so v9.10
+          # does not sort below v9.9. An empty result fails the guard below
+          # rather than silently reporting "up to date".
           latest=$(git ls-remote --tags --refs \
               https://github.com/ladislav-zezula/StormLib.git 'v*' \
             | awk '{ sub("refs/tags/", "", $2); print $2 }' \
@@ -61,56 +71,60 @@ jobs:
             exit 1
           fi
 
+          branch="stormlib/$latest"
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          echo "branch=stormlib/$latest" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-          # sort -V puts the newer tag last; if that is still the current pin
-          # there is nothing to do, and this also refuses to walk backwards.
           newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)
           if [[ "$current" == "$latest" || "$newest" != "$latest" ]]; then
             echo "StormLib is up to date at $current"
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "StormLib $current -> $latest"
-            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Skip when a pull request already exists
-        id: existing
-        if: steps.versions.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.versions.outputs.branch }}
-        run: |
-          set -Eeuo pipefail
-          open=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')
+          # Only a pull request from a branch in this repository counts as
+          # "already handled". gh pr list --head matches on branch name alone,
+          # so a fork could otherwise park a PR on the predictable branch name
+          # and stall this automation indefinitely.
+          open=$(gh pr list --head "$branch" --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
           if [[ "$open" != "0" ]]; then
-            echo "a pull request for $BRANCH is already open"
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "a pull request for $branch is already open"
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      - name: Update pins, build and test
-        if: steps.existing.outputs.proceed == 'true'
+          echo "StormLib $current -> $latest"
+          echo 'needed=true' >> "$GITHUB_OUTPUT"
+
+  prepare:
+    needs: resolve
+    if: needs.resolve.outputs.needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Update pins, build and test on amd64
         env:
-          LATEST: ${{ steps.versions.outputs.latest }}
+          LATEST: ${{ needs.resolve.outputs.latest }}
+          STORMLIB_UPDATE_TEST_PLATFORM: linux/amd64
         run: |
           set -Eeuo pipefail
           # The updater resolves the commit and checksum, verifies the version
           # string inside the archive, rewrites the Dockerfile atomically, then
-          # builds the image and runs test.sh. It restores the original
-          # Dockerfile if any of that fails.
+          # builds and runs test.sh. It restores the original Dockerfile if any
+          # of that fails.
           bash mapservice-build/update-stormlib-pin.sh "$LATEST"
 
-      - name: Open pull request
-        if: steps.existing.outputs.proceed == 'true'
+      - name: Push the candidate branch
         env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ steps.versions.outputs.branch }}
-          CURRENT: ${{ steps.versions.outputs.current }}
-          LATEST: ${{ steps.versions.outputs.latest }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          LATEST: ${{ needs.resolve.outputs.latest }}
         run: |
           set -Eeuo pipefail
           if git diff --quiet -- mapservice-build/Dockerfile; then
@@ -126,9 +140,56 @@ jobs:
 
           Resolved by .github/workflows/update-stormlib-pin.yml through
           mapservice-build/update-stormlib-pin.sh, which moves the version,
-          source commit and archive checksum together and only accepts them
-          after building the image and running mapservice-build/test.sh."
-          git push --force-with-lease origin "$BRANCH"
+          source commit and archive checksum together."
+          # A leftover branch from an earlier run that failed after pushing is
+          # replaced rather than inherited: resolve already established that no
+          # pull request of ours is open for it, so nothing is being discarded.
+          git push --force origin "$BRANCH"
+
+  verify-arm64:
+    needs: [resolve, prepare]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.resolve.outputs.branch }}
+
+      - name: Build and test the candidate natively on arm64
+        run: |
+          set -Eeuo pipefail
+          image=stormlib-update-arm64
+          docker build --platform linux/arm64 -t "$image" mapservice-build
+          ./mapservice-build/test.sh "$image"
+
+  open-pull-request:
+    needs: [resolve, prepare, verify-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          CURRENT: ${{ needs.resolve.outputs.current }}
+          LATEST: ${{ needs.resolve.outputs.latest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -Eeuo pipefail
+          # Re-check rather than assume: this job could be retried after a PR
+          # was already created by an earlier attempt.
+          open=$(gh pr list --head "$BRANCH" --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $BRANCH already exists"
+            exit 0
+          fi
 
           gh pr create \
             --base main \
@@ -141,13 +202,34 @@ jobs:
           the upstream tag and verifies the version string inside the downloaded
           archive before rewriting anything.
 
-          **Already validated.** The updater built \`mapservice-build\` and ran
-          \`mapservice-build/test.sh\` against it before this branch was pushed;
-          it would have restored the previous Dockerfile on any failure. See the
-          workflow run linked below for that output.
+          **Validated on both architectures.** \`mapservice-build\` was built and
+          \`mapservice-build/test.sh\` was run against it on amd64 and again
+          natively on arm64 before this pull request was opened. StormLib is
+          compiled from source, so both platforms are checked rather than assumed
+          from one.
 
-          This pull request was opened with \`GITHUB_TOKEN\`, which by design
-          does not trigger workflow runs, so it has no checks of its own. Review
-          the workflow log, then merge.
+          This pull request was opened with \`GITHUB_TOKEN\`, which by design does
+          not trigger workflow runs, so it has no checks of its own. Review the
+          workflow log, then merge.
 
-          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          Run: ${RUN_URL}"
+
+  discard-failed-candidate:
+    needs: [resolve, prepare, verify-arm64]
+    if: failure() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Delete the unvalidated branch
+        env:
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+        run: |
+          set -Eeuo pipefail
+          # Validation failed after the branch was pushed. Remove it so the next
+          # scheduled run starts clean instead of retrying against a branch that
+          # is already known to be broken.
+          git push origin --delete "$BRANCH" || true
