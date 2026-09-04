@@ -303,8 +303,25 @@ without a demonstrated consumer requirement.
   A second literal copy is a pin Renovate will not update, and it drifts silently
   because nothing compares the copies against each other.
 - Pin direct language/tool dependencies where their manager supports it.
-- Let Renovate update pins; manually review protected runtime and toolchain
-  families defined in `renovate.json`.
+- Let Renovate update pins. Digest updates merge automatically once CI is green:
+  the image content is what `test.sh` validates, and a digest bump carries no
+  information a human reviewer could check by reading the diff. Renovate waits
+  for the status checks before merging, so a failing `test.sh` still blocks it.
+- Version changes to the protected families in `renovate.json` still require a
+  human. A new upstream version can change behaviour in ways a digest refresh
+  of the same tag cannot, and for source-built components it also needs the
+  commit and checksum pins updated in the same change.
+- Accepted risk: because these images track unbounded floating tags, a digest
+  update can itself carry a major upstream jump — a new Go, WordPress or PHP
+  release arrives as a changed checksum on the same tag, merges automatically
+  and publishes. `test.sh` proves the image builds, boots and serves; it does
+  not prove a consumer still compiles or runs against the new version, and it
+  deliberately does not assert versions. This is a deliberate trade for keeping
+  security updates flowing without human latency: consumers pin these images by
+  digest and gate their own upgrades. If that stops being acceptable for a given
+  image, narrow its tag to a version channel (`golang:1.27-trixie`,
+  `wordpress:7-php8.3-apache`) — digest updates stay automatic within the
+  channel, and crossing it becomes a deliberate one-line change.
 - Every Dockerfile accepts `ARG VCS_REF=unknown` and records
   `org.opencontainers.image.source` and
   `org.opencontainers.image.revision` labels.
@@ -333,7 +350,8 @@ without a demonstrated consumer requirement.
    repository layout contract.
 7. Add a preview row to the root README and keep detailed usage in the image
    README.
-8. Add protected Renovate packages only when updates need manual review.
+8. Add protected Renovate packages only when a *version* change needs manual
+   review. Digest updates automerge for every image.
 9. Build and test both architectures before advertising the image.
 
 Do not add scan/sign/attest switches. Those are repository guarantees.
