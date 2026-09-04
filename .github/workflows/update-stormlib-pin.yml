@@ -7,15 +7,20 @@ name: Update StormLib pin
 # transactional pin updater.
 #
 # The pull request is opened with GITHUB_TOKEN, which by design does not trigger
-# workflow runs, so it carries no checks of its own. That is why this workflow
-# runs the same validation ci.yml would: the updater builds and tests on amd64,
-# and a second job rebuilds and retests the pushed branch natively on arm64.
-# StormLib is compiled C/C++, so a release can break one architecture and not
-# the other -- claiming "validated" off a single platform would be false.
+# workflow runs, so it carries no checks of its own. This workflow therefore runs
+# the validation itself: the updater builds and tests on amd64, and a second job
+# rebuilds and retests the pushed branch natively on arm64. StormLib is compiled
+# C/C++, so a release can break one architecture and not the other -- claiming
+# "validated" off a single platform would be false.
 #
-# The branch is pushed before validation completes so arm64 can check out
-# exactly what would be merged. If validation fails the branch is deleted again,
-# leaving no half-finished state behind.
+# The branch is pushed before validation completes so arm64 checks out exactly
+# the commit that would be merged. A candidate that fails is deleted again.
+#
+# What this does NOT reproduce: ci.yml under pull_request validates GitHub's
+# synthetic merge ref, whereas these jobs validate the candidate head against the
+# main it was branched from. The gap is closed by refusing to open the pull
+# request if main moved during validation -- the run starts over instead, so the
+# tested tree and the merged tree stay identical.
 
 on:
   schedule:
@@ -38,6 +43,7 @@ jobs:
       current: ${{ steps.versions.outputs.current }}
       latest: ${{ steps.versions.outputs.latest }}
       branch: ${{ steps.versions.outputs.branch }}
+      base_sha: ${{ steps.versions.outputs.base_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -75,6 +81,10 @@ jobs:
           echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          # The commit validation is performed against. open-pull-request refuses
+          # to proceed if main has moved past it, so the tree that was tested is
+          # the tree that gets merged.
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
           newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)
           if [[ "$current" == "$latest" || "$newest" != "$latest" ]]; then
@@ -83,11 +93,12 @@ jobs:
             exit 0
           fi
 
-          # Only a pull request from a branch in this repository counts as
-          # "already handled". gh pr list --head matches on branch name alone,
-          # so a fork could otherwise park a PR on the predictable branch name
-          # and stall this automation indefinitely.
-          open=$(gh pr list --head "$branch" --state open \
+          # Only a pull request from a branch in this repository, targeting main,
+          # counts as "already handled". --head matches on branch name alone, so
+          # a fork could otherwise park a PR on the predictable branch name and
+          # stall this automation; --base keeps a PR aimed at some other branch
+          # from doing the same permanently.
+          open=$(gh pr list --head "$branch" --base main --state open \
             --json isCrossRepository \
             --jq '[.[] | select(.isCrossRepository == false)] | length')
           if [[ "$open" != "0" ]]; then
@@ -123,12 +134,24 @@ jobs:
 
       - name: Push the candidate branch
         env:
+          GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ needs.resolve.outputs.branch }}
           LATEST: ${{ needs.resolve.outputs.latest }}
         run: |
           set -Eeuo pipefail
           if git diff --quiet -- mapservice-build/Dockerfile; then
             echo 'updater reported success but left the Dockerfile unchanged' >&2
+            exit 1
+          fi
+
+          # resolve checked this up to an hour ago; re-check immediately before
+          # the force push so a pull request opened during the build is not
+          # overwritten.
+          open=$(gh pr list --head "$BRANCH" --base main --state open \
+            --json isCrossRepository \
+            --jq '[.[] | select(.isCrossRepository == false)] | length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $BRANCH was opened while this run was building" >&2
             exit 1
           fi
 
@@ -178,12 +201,25 @@ jobs:
           BRANCH: ${{ needs.resolve.outputs.branch }}
           CURRENT: ${{ needs.resolve.outputs.current }}
           LATEST: ${{ needs.resolve.outputs.latest }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -Eeuo pipefail
+          # Both builds validated the candidate against the main it was branched
+          # from. Unlike a pull_request run of ci.yml there is no synthetic merge
+          # ref here, so if main has moved the validated tree is no longer the
+          # tree that would be merged. Fail instead: the branch is discarded and
+          # the next scheduled run rebuilds against the new main.
+          current_main=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha')
+          if [[ "$current_main" != "$BASE_SHA" ]]; then
+            echo "main advanced from ${BASE_SHA} to ${current_main} during validation" >&2
+            echo 'the validated tree is not what would be merged; discarding this candidate' >&2
+            exit 1
+          fi
+
           # Re-check rather than assume: this job could be retried after a PR
           # was already created by an earlier attempt.
-          open=$(gh pr list --head "$BRANCH" --state open \
+          open=$(gh pr list --head "$BRANCH" --base main --state open \
             --json isCrossRepository \
             --jq '[.[] | select(.isCrossRepository == false)] | length')
           if [[ "$open" != "0" ]]; then
@@ -215,7 +251,7 @@ jobs:
           Run: ${RUN_URL}"
 
   discard-failed-candidate:
-    needs: [resolve, prepare, verify-arm64]
+    needs: [resolve, prepare, verify-arm64, open-pull-request]
     if: failure() && needs.prepare.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -94,6 +94,12 @@ release can break one architecture and not the other — validating only the
 platform the updater happens to run on would be misleading. A branch that fails
 arm64 validation is deleted rather than left behind.
 
+Both builds validate the candidate against the `main` it was branched from.
+There is no synthetic merge ref here, the way there would be under
+`pull_request`, so if `main` moves while validation is running the candidate is
+discarded instead of opened — the tree that was tested is the tree that gets
+merged, or there is no pull request at all.
+
 The pull request is opened with `GITHUB_TOKEN`, which by design does not trigger
 workflow runs, so it carries no checks of its own — read the workflow log, then
 merge.
