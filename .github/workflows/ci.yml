@@ -373,7 +373,6 @@ jobs:
               .matchManagers == ["dockerfile"] and
               ((.matchPackageNames | sort) == ([
                 "golang",
-                "golangci/golangci-lint",
                 "library/wordpress",
                 "serversideup/php",
                 "sqlc/sqlc",

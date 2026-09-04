@@ -105,4 +105,4 @@ full `sha-<git-commit>` tag format; older tags are not removed.
 
 Repository-authored files are Apache-2.0 licensed; see [`LICENSE`](LICENSE) and
 [`NOTICE.md`](NOTICE.md). Bundled upstream components retain their own licenses,
-which are documented by each image.
+which are carried inside each image under `/usr/share/doc`.

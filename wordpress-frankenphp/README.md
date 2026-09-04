@@ -16,12 +16,20 @@ Architectures: `linux/amd64`, `linux/arm64`.
 
 ## Contents
 
-- WordPress 7.1 core from the pinned official WordPress image.
-- PHP 8.5 and FrankenPHP from the pinned Serversideup runtime.
+- WordPress core from the official WordPress image.
+- PHP and FrankenPHP from the Serversideup runtime.
 - PHP extensions: `igbinary`, `zstd`, `lzf`, `mysqli`, `exif`, `imagick`, `gd`,
   `intl`, `timezonedb`, `bcmath`, `shmop`, and `redis`.
-- WordPress source license, notice, and exact upstream image provenance under
-  `/usr/share/doc/wordpress`.
+- Upstream image digests recorded as `io.forge-images.*.source-digest` labels.
+
+Both upstream images are tracked by floating tag and pinned by digest, so
+Renovate digest updates carry new upstream releases in without any version
+edit. The exact versions in a given build are readable from the image itself:
+
+```bash
+docker run --rm --entrypoint php <image> -r \
+  'require "/var/www/html/public/wp-includes/version.php"; echo "$wp_version PHP " . PHP_VERSION . "\n";'
+```
 
 WordPress is installed at:
 
@@ -64,6 +72,8 @@ docker buildx build --platform linux/amd64 --load \
 ./wordpress-frankenphp/test.sh test-wordpress-frankenphp
 ```
 
-The smoke test verifies PHP and WordPress versions, every curated extension,
-licenses/provenance, non-root ownership, empty writable volumes, and the absence
-of common secret files.
+The smoke test verifies that PHP and WordPress load, every curated extension is
+present, upstream digest labels match the Dockerfile pins, ownership is non-root,
+volumes are empty and writable, and no common secret files were baked in. It
+reports the PHP and WordPress versions but does not assert them, so an upstream
+release never turns a digest update red.

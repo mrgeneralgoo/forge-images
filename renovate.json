@@ -14,9 +14,6 @@
   "dependencyDashboard": true,
   "prHourlyLimit": 2,
   "prConcurrentLimit": 5,
-  "allowedCommands": [
-    "^bash mapservice-build/update-stormlib-pin\\.sh v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?$"
-  ],
   "customManagers": [
     {
       "customType": "regex",
@@ -62,16 +59,7 @@
       "automerge": false,
       "matchManagers": [
         "custom.regex"
-      ],
-      "postUpgradeTasks": {
-        "commands": [
-          "bash mapservice-build/update-stormlib-pin.sh {{{newValue}}}"
-        ],
-        "fileFilters": [
-          "mapservice-build/Dockerfile"
-        ],
-        "executionMode": "update"
-      }
+      ]
     },
     {
       "matchManagers": [
@@ -87,7 +75,6 @@
       "matchPackageNames": [
         "golang",
         "sqlc/sqlc",
-        "golangci/golangci-lint",
         "wordpress",
         "library/wordpress",
         "serversideup/php"

@@ -4,17 +4,16 @@ Copyright 2026 mrgeneralgoo
 This repository is licensed under the Apache License, Version 2.0; see
 LICENSE.
 
-Each image may include software under additional licenses. Direct notices and
-provenance for the generic images are kept beside their Dockerfiles:
+Each image may include software under additional licenses. The applicable
+license files are copied into the image during the build and are readable from
+the image itself:
 
-- `mapservice-build/NOTICE.md` and the image's `/usr/share/doc/go/`,
-  `/usr/share/doc/sqlc/`, `/usr/share/doc/golangci-lint/`, and
+- `mapservice-build`: `/usr/share/doc/go/`, `/usr/share/doc/sqlc/`, and
   `/usr/share/doc/stormlib/`
-- `wordpress-frankenphp/NOTICE.md` and the image's `/usr/share/doc/wordpress/`
+- `wordpress-frankenphp`: WordPress ships `license.txt` inside the document
+  root at `/var/www/html/public/`
 
-The applicable license files are copied from the corresponding upstream
-artifacts during image builds. For `mapservice-build`, the pinned golangci-lint
-corresponding-source archive is also retained at
-`/usr/share/source/golangci-lint/source.tar.gz`. Generated SBOM metadata is
-supplemental; it does not replace direct license, provenance, or source
-artifacts.
+Upstream images are pinned by digest and recorded as
+`io.forge-images.*.source-digest` labels, readable with `docker inspect`.
+Generated SBOM metadata is supplemental; it does not replace the license files
+carried in the images.

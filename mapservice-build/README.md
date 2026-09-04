@@ -15,9 +15,9 @@ Architectures: `linux/amd64`, `linux/arm64`.
 
 ## Included toolchain
 
-- Official Go distribution copied from a pinned multi-architecture Go image.
-- Pinned sqlc binary.
-- Pinned golangci-lint binary and corresponding GPL source archive.
+- Official Go distribution copied from a digest-pinned multi-architecture Go
+  image.
+- sqlc binary from a digest-pinned image.
 - StormLib built from a commit-pinned, checksum-verified source archive.
 - Git, CA certificates, GCC, libc headers, bzip2 headers, and zlib headers.
 
@@ -25,19 +25,38 @@ Transient download and build tools are absent from the final image. The working
 directory is `/go`, `GOPATH=/go`, and Go's automatic toolchain download is
 disabled with `GOTOOLCHAIN=local`.
 
-## Provenance and licenses
+## Version tracking
 
-Source commit IDs, source archive SHA256 values, source URLs, licenses, and
-binary distribution references are stored under `/usr/share/doc`. The
-corresponding golangci-lint source archive is retained at:
+Go and Debian follow floating tags (`golang:trixie`, `debian:trixie-slim`)
+pinned by digest, so Renovate digest updates carry new upstream releases in
+without any version edit anywhere else. Each digest literal lives in exactly one
+`ARG *_REF` line at the top of the Dockerfile; labels are derived from it.
 
-```text
-/usr/share/source/golangci-lint/source.tar.gz
+`golang:trixie` rather than `golang:latest` keeps the build stage aligned with
+the `debian:trixie-slim` runtime, so the StormLib shared object it compiles
+always matches the runtime's glibc.
+
+sqlc has no minor tag upstream, so it stays pinned to an exact version and needs
+a deliberate bump. StormLib is built from source and keeps its commit and
+checksum pinned.
+
+Read the actual versions out of any build with:
+
+```bash
+docker run --rm <image> go version
+docker run --rm --entrypoint sqlc <image> version
 ```
 
+## Licenses
+
+Upstream license files are copied into the image: Go's `LICENSE` and `PATENTS`
+from the official distribution, StormLib's `LICENSE` from the source tree it is
+built from, and sqlc's MIT text from `licenses/sqlc-LICENSE` in this repository
+(the upstream sqlc image is a scratch image carrying no license file). All are
+under `/usr/share/doc`.
+
 StormLib is installed under `/usr/local`, with dynamic linker configuration in
-`/etc/ld.so.conf.d/stormlib.conf`. See [`NOTICE.md`](NOTICE.md) for component
-license details.
+`/etc/ld.so.conf.d/stormlib.conf`.
 
 ## Usage
 
