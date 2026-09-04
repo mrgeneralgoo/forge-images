@@ -1,0 +1,153 @@
+name: Update StormLib pin
+
+# StormLib is built from source, so a release bump has to move three pins at
+# once: the version, the source commit and the archive checksum. Only the
+# version is discoverable from the tag, and the hosted Renovate app cannot run
+# commands, so this workflow resolves the other two by running the repository's
+# transactional pin updater.
+#
+# The updater builds the image and runs mapservice-build/test.sh before it
+# accepts the new pins, so the change is already validated when the pull request
+# is opened. The pull request itself is created with GITHUB_TOKEN, which by
+# design does not trigger further workflow runs, so it carries no checks of its
+# own -- read this workflow's log, then merge.
+
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-stormlib-pin
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Resolve current and upstream StormLib versions
+        id: versions
+        run: |
+          set -Eeuo pipefail
+          dockerfile=mapservice-build/Dockerfile
+
+          current=$(awk '$1 == "ARG" && index($2, "STORMLIB_VERSION=") == 1 {
+            sub("^[^=]+=", "", $2); print $2; exit
+          }' "$dockerfile")
+          if ! [[ "$current" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "unreadable StormLib pin in $dockerfile: ${current:-<empty>}" >&2
+            exit 1
+          fi
+
+          # Only annotated/lightweight release tags, sorted by version rather
+          # than lexically so v9.10 does not sort below v9.9.
+          latest=$(git ls-remote --tags --refs \
+              https://github.com/ladislav-zezula/StormLib.git 'v*' \
+            | awk '{ sub("refs/tags/", "", $2); print $2 }' \
+            | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+            | sort -V \
+            | tail -1)
+          if ! [[ "$latest" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "could not resolve an upstream StormLib release tag" >&2
+            exit 1
+          fi
+
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "branch=stormlib/$latest" >> "$GITHUB_OUTPUT"
+
+          # sort -V puts the newer tag last; if that is still the current pin
+          # there is nothing to do, and this also refuses to walk backwards.
+          newest=$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -1)
+          if [[ "$current" == "$latest" || "$newest" != "$latest" ]]; then
+            echo "StormLib is up to date at $current"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "StormLib $current -> $latest"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip when a pull request already exists
+        id: existing
+        if: steps.versions.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
+        run: |
+          set -Eeuo pipefail
+          open=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')
+          if [[ "$open" != "0" ]]; then
+            echo "a pull request for $BRANCH is already open"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update pins, build and test
+        if: steps.existing.outputs.proceed == 'true'
+        env:
+          LATEST: ${{ steps.versions.outputs.latest }}
+        run: |
+          set -Eeuo pipefail
+          # The updater resolves the commit and checksum, verifies the version
+          # string inside the archive, rewrites the Dockerfile atomically, then
+          # builds the image and runs test.sh. It restores the original
+          # Dockerfile if any of that fails.
+          bash mapservice-build/update-stormlib-pin.sh "$LATEST"
+
+      - name: Open pull request
+        if: steps.existing.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.versions.outputs.branch }}
+          CURRENT: ${{ steps.versions.outputs.current }}
+          LATEST: ${{ steps.versions.outputs.latest }}
+        run: |
+          set -Eeuo pipefail
+          if git diff --quiet -- mapservice-build/Dockerfile; then
+            echo 'updater reported success but left the Dockerfile unchanged' >&2
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git add mapservice-build/Dockerfile
+          git commit -m "build(deps): update StormLib to ${LATEST}
+
+          Resolved by .github/workflows/update-stormlib-pin.yml through
+          mapservice-build/update-stormlib-pin.sh, which moves the version,
+          source commit and archive checksum together and only accepts them
+          after building the image and running mapservice-build/test.sh."
+          git push --force-with-lease origin "$BRANCH"
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "build(deps): update StormLib to ${LATEST}" \
+            --body "Updates StormLib from \`${CURRENT}\` to \`${LATEST}\`.
+
+          The version, source commit and archive checksum move together;
+          \`mapservice-build/update-stormlib-pin.sh\` resolves the last two from
+          the upstream tag and verifies the version string inside the downloaded
+          archive before rewriting anything.
+
+          **Already validated.** The updater built \`mapservice-build\` and ran
+          \`mapservice-build/test.sh\` against it before this branch was pushed;
+          it would have restored the previous Dockerfile on any failure. See the
+          workflow run linked below for that output.
+
+          This pull request was opened with \`GITHUB_TOKEN\`, which by design
+          does not trigger workflow runs, so it has no checks of its own. Review
+          the workflow log, then merge.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
