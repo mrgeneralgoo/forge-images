@@ -371,13 +371,21 @@ jobs:
             any(.packageRules[];
               .automerge == false and
               .matchManagers == ["dockerfile"] and
+              ((.matchUpdateTypes | sort) == ([
+                "major",
+                "minor",
+                "patch"
+              ] | sort)) and
               ((.matchPackageNames | sort) == ([
                 "golang",
                 "library/wordpress",
                 "serversideup/php",
                 "sqlc/sqlc",
                 "wordpress"
-              ] | sort)))
+              ] | sort))) and
+            any(.packageRules[];
+              .automerge == true and
+              (.matchUpdateTypes | index("digest")) != null)
           ' renovate.json >/dev/null
 
       - name: Validate vulnerability documentation policy

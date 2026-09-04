@@ -80,6 +80,11 @@
         "library/wordpress",
         "serversideup/php"
       ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
       "automerge": false
     }
   ]
