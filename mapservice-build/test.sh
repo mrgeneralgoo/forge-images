@@ -10,125 +10,68 @@ fi
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 dockerfile=$script_dir/Dockerfile
 
-pin() {
+fail() { echo "$1" >&2; exit 1; }
+
+# Pins are read from the Dockerfile rather than duplicated here, so a Renovate
+# digest bump never needs a matching edit in this file.
+arg() {
   awk -v key="$1" '$1 == "ARG" && index($2, key "=") == 1 { sub("^[^=]+=", "", $2); print $2; exit }' "$dockerfile"
 }
 
-expected_stormlib_version=$(pin STORMLIB_VERSION)
-expected_stormlib_commit=$(pin STORMLIB_COMMIT)
-expected_stormlib_sha=$(pin STORMLIB_ARCHIVE_SHA256)
-expected_go_version=$(pin GO_VERSION)
-expected_go_commit=$(pin GO_COMMIT)
-expected_go_sha=$(pin GO_ARCHIVE_SHA256)
-expected_sqlc_version=$(pin SQLC_VERSION)
-expected_sqlc_commit=$(pin SQLC_COMMIT)
-expected_sqlc_sha=$(pin SQLC_ARCHIVE_SHA256)
-expected_golangci_version=$(pin GOLANGCI_VERSION)
-expected_golangci_commit=$(pin GOLANGCI_COMMIT)
-expected_golangci_sha=$(pin GOLANGCI_ARCHIVE_SHA256)
+go_ref=$(arg GO_REF)
+sqlc_ref=$(arg SQLC_REF)
+debian_ref=$(arg DEBIAN_REF)
+stormlib_version=$(arg STORMLIB_VERSION)
+stormlib_commit=$(arg STORMLIB_COMMIT)
+stormlib_sha=$(arg STORMLIB_ARCHIVE_SHA256)
 
-if ! [[ "$expected_stormlib_version" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "invalid StormLib version pin" >&2
-  exit 1
-fi
-if ! [[ "$expected_go_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "invalid Go version pin" >&2
-  exit 1
-fi
-if ! [[ "$expected_sqlc_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "invalid sqlc version pin" >&2
-  exit 1
-fi
-if ! [[ "$expected_golangci_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "invalid golangci-lint version pin" >&2
-  exit 1
+# A malformed or missing pin would otherwise degrade the comparisons below into
+# empty-string matches that always pass.
+for ref in "$go_ref" "$sqlc_ref" "$debian_ref"; do
+  [[ "$ref" =~ ^[a-z0-9._/-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] ||
+    fail "malformed upstream image reference in Dockerfile: ${ref:-<empty>}"
+done
+[[ "$stormlib_version" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] ||
+  fail "invalid StormLib version pin: ${stormlib_version:-<empty>}"
+[[ "$stormlib_commit" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "invalid StormLib commit pin: ${stormlib_commit:-<empty>}"
+[[ "$stormlib_sha" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "invalid StormLib archive checksum pin: ${stormlib_sha:-<empty>}"
+
+# Every digest literal must live in an ARG line. A second copy anywhere else is
+# a pin Renovate will not update and that will silently drift.
+if grep -n '@sha256:' "$dockerfile" | grep -qv '^[0-9]*:ARG '; then
+  fail 'image digest literal outside an ARG line in Dockerfile'
 fi
 
-for commit in \
-  "$expected_stormlib_commit" \
-  "$expected_go_commit" \
-  "$expected_sqlc_commit" \
-  "$expected_golangci_commit"; do
-  if ! [[ "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "invalid source commit pin" >&2
-    exit 1
-  fi
-done
-for sha in \
-  "$expected_stormlib_sha" \
-  "$expected_go_sha" \
-  "$expected_sqlc_sha" \
-  "$expected_golangci_sha"; do
-  if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "invalid source archive checksum pin" >&2
-    exit 1
-  fi
-done
+# Each FROM must resolve through the authoritative ARG. Without this the ARG,
+# the labels and the actual base image could disagree while every derived
+# assertion below still passed.
+grep -Fxq 'FROM ${SQLC_REF} AS sqlc' "$dockerfile" ||
+  fail 'sqlc stage does not build from ${SQLC_REF}'
+grep -Fxq 'FROM ${GO_REF} AS go-distribution' "$dockerfile" ||
+  fail 'go-distribution stage does not build from ${GO_REF}'
+grep -Fxq 'FROM ${DEBIAN_REF}' "$dockerfile" ||
+  fail 'final stage does not build from ${DEBIAN_REF}'
+# StormLib must be compiled inside the same image the runtime uses. GO_REF and
+# DEBIAN_REF are independent pins, so building in the Go image could link the
+# shared object against a newer glibc than the runtime ships.
+grep -Fxq 'FROM ${DEBIAN_REF} AS stormlib-builder' "$dockerfile" ||
+  fail 'stormlib-builder does not build from ${DEBIAN_REF}'
 
 for text in \
-  'FROM golang:1.27.0-trixie@sha256:ae28539d2ef595b9a2930dd7f031d9592376829dc0eae7cb869559f7d5812c3a AS go-distribution' \
   'COPY --from=go-distribution /usr/local/go/ /usr/local/go/' \
-  'FROM sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537' \
-  'FROM golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
-  'Binary distribution: golangci/golangci-lint:v2.13.2@sha256:ba07dffad130794ae79ebaa0056809d18c0168f3f846480ffd3eb6c04578b83d' \
-  'AS upstream-source' \
-  'COPY --from=upstream-source /tmp/upstream/go/LICENSE' \
-  'COPY --from=upstream-source /tmp/metadata/go/PROVENANCE' \
-  'COPY --from=upstream-source /tmp/upstream/sqlc/LICENSE' \
-  'COPY --from=upstream-source /tmp/metadata/sqlc/PROVENANCE' \
-  'COPY --from=upstream-source /tmp/upstream/golangci-lint/LICENSE' \
-  'COPY --from=upstream-source /tmp/metadata/golangci-lint/PROVENANCE' \
-  'COPY --from=upstream-source /tmp/upstream/stormlib/LICENSE' \
-  'COPY --from=upstream-source /tmp/metadata/stormlib/PROVENANCE' \
-  'org.opencontainers.image.licenses="Apache-2.0 AND BSD-3-Clause AND GPL-3.0-only AND MIT"'; do
-  grep -F "$text" "$dockerfile" >/dev/null
+  'COPY --from=sqlc /workspace/sqlc /usr/local/bin/sqlc' \
+  'COPY --from=stormlib-builder /opt/stormlib/ /usr/local/' \
+  'https://codeload.github.com/ladislav-zezula/StormLib/tar.gz/' \
+  'sha256sum --check --status'; do
+  grep -F "$text" "$dockerfile" >/dev/null || fail "missing Dockerfile contract: $text"
 done
 
-grep -Eq '^FROM debian:trixie-slim@sha256:[0-9a-f]{64}$' "$dockerfile"
-
-for key in \
-  STORMLIB_VERSION STORMLIB_COMMIT STORMLIB_ARCHIVE_SHA256 \
-  GO_VERSION GO_COMMIT GO_ARCHIVE_SHA256 \
-  SQLC_VERSION SQLC_COMMIT SQLC_ARCHIVE_SHA256 \
-  GOLANGCI_VERSION GOLANGCI_COMMIT GOLANGCI_ARCHIVE_SHA256; do
-  grep -Eq "^ARG ${key}=" "$dockerfile"
-done
-
-if grep -Eq '^COPY --from=(sqlc|golangci)(:[^[:space:]]+)?[[:space:]]+.*(LICENSE|PROVENANCE)' "$dockerfile"; then
-  echo "license or provenance copied from a tool image" >&2
-  exit 1
-fi
-for text in \
-  "ARG STORMLIB_VERSION=$expected_stormlib_version" \
-  "ARG STORMLIB_COMMIT=$expected_stormlib_commit" \
-  "ARG STORMLIB_ARCHIVE_SHA256=$expected_stormlib_sha" \
-  "ARG GO_VERSION=$expected_go_version" \
-  "ARG GO_COMMIT=$expected_go_commit" \
-  "ARG GO_ARCHIVE_SHA256=$expected_go_sha" \
-  "ARG SQLC_VERSION=$expected_sqlc_version" \
-  "ARG SQLC_COMMIT=$expected_sqlc_commit" \
-  "ARG SQLC_ARCHIVE_SHA256=$expected_sqlc_sha" \
-  "ARG GOLANGCI_VERSION=$expected_golangci_version" \
-  "ARG GOLANGCI_COMMIT=$expected_golangci_commit" \
-  "ARG GOLANGCI_ARCHIVE_SHA256=$expected_golangci_sha"; do
-  grep -F "$text" "$dockerfile" >/dev/null
-done
-
-for url in \
-  'https://codeload.github.com/golang/go/tar.gz/' \
-  'https://codeload.github.com/sqlc-dev/sqlc/tar.gz/' \
-  'https://codeload.github.com/golangci/golangci-lint/tar.gz/' \
-  'https://codeload.github.com/ladislav-zezula/StormLib/tar.gz/'; do
-  grep -F "$url" "$dockerfile" >/dev/null
-done
-
-for checksum in \
-  "$expected_go_sha" \
-  "$expected_sqlc_sha" \
-  "$expected_golangci_sha" \
-  "$expected_stormlib_sha"; do
-  grep -F "sha256sum --check --status" "$dockerfile" >/dev/null
-  grep -F "$checksum" "$dockerfile" >/dev/null
+# StormLib is the only component built from source, so its three pins must stay
+# consistent with each other.
+for key in STORMLIB_VERSION STORMLIB_COMMIT STORMLIB_ARCHIVE_SHA256; do
+  grep -Eq "^ARG ${key}=" "$dockerfile" || fail "missing pin: ARG ${key}"
 done
 
 test_updater_rollback() {
@@ -136,7 +79,7 @@ test_updater_rollback() {
   local fixture
   fixture=$(mktemp -d)
   trap 'rm -rf "$fixture"' RETURN
-  cp "$dockerfile" "$script_dir/update-stormlib-pin.sh" "$script_dir/NOTICE.md" "$script_dir/test.sh" "$fixture/"
+  cp "$dockerfile" "$script_dir/update-stormlib-pin.sh" "$script_dir/test.sh" "$fixture/"
   cp "$fixture/Dockerfile" "$fixture/Dockerfile.before"
 
   set +e
@@ -149,15 +92,14 @@ test_updater_rollback() {
   set -e
 
   if (( status == 0 )); then
-    echo "StormLib updater failure injection unexpectedly succeeded: $mode" >&2
-    exit 1
+    fail "StormLib updater failure injection unexpectedly succeeded: $mode"
   fi
-  cmp -s "$fixture/Dockerfile.before" "$fixture/Dockerfile"
+  cmp -s "$fixture/Dockerfile.before" "$fixture/Dockerfile" ||
+    fail "StormLib updater did not roll back the Dockerfile: $mode"
   if find "$fixture" -maxdepth 1 -type f \
       \( -name '*.tmp.*' -o -name '*.backup.*' -o -name 'Dockerfile.new' \) \
       -print -quit | grep -q .; then
-    echo "StormLib updater left transaction artifacts: $mode" >&2
-    exit 1
+    fail "StormLib updater left transaction artifacts: $mode"
   fi
   rm -rf "$fixture"
   trap - RETURN
@@ -167,37 +109,39 @@ for mode in exit term; do
   test_updater_rollback "$mode"
 done
 
-expected_stormlib_version_number=${expected_stormlib_version#v}
 expected_arch=$(docker image inspect "$image" --format '{{.Architecture}}')
-case "$expected_arch" in amd64|arm64) ;; *) echo "unexpected image architecture: $expected_arch" >&2; exit 1;; esac
+case "$expected_arch" in amd64|arm64) ;; *) fail "unexpected image architecture: $expected_arch";; esac
+
+label() { docker image inspect "$image" --format "{{ index .Config.Labels \"$1\" }}"; }
+test "$(label io.forge-images.go.source-digest)" = "${go_ref##*@}" ||
+  fail "go source-digest label does not match ${go_ref##*@}"
+test "$(label io.forge-images.sqlc.source-digest)" = "${sqlc_ref##*@}" ||
+  fail "sqlc source-digest label does not match ${sqlc_ref##*@}"
+
+# Everything below checks the real image. Tool versions are reported, never
+# asserted: the image tracks upstream floating tags, so a version assertion here
+# would turn every upstream release into a red pull request. StormLib is the
+# exception -- it is built from a pinned source commit, so the version compiled
+# into the header must match the pin.
 docker run --rm \
   -e EXPECTED_ARCH="$expected_arch" \
-  -e EXPECTED_STORMLIB_VERSION="$expected_stormlib_version_number" \
-  -e EXPECTED_STORMLIB_COMMIT="$expected_stormlib_commit" \
-  -e EXPECTED_STORMLIB_SHA="$expected_stormlib_sha" \
-  -e EXPECTED_GO_VERSION="$expected_go_version" \
-  -e EXPECTED_GO_COMMIT="$expected_go_commit" \
-  -e EXPECTED_GO_SHA="$expected_go_sha" \
-  -e EXPECTED_SQLC_VERSION="$expected_sqlc_version" \
-  -e EXPECTED_SQLC_COMMIT="$expected_sqlc_commit" \
-  -e EXPECTED_SQLC_SHA="$expected_sqlc_sha" \
-  -e EXPECTED_GOLANGCI_VERSION="$expected_golangci_version" \
-  -e EXPECTED_GOLANGCI_COMMIT="$expected_golangci_commit" \
-  -e EXPECTED_GOLANGCI_SHA="$expected_golangci_sha" \
+  -e EXPECTED_STORMLIB_VERSION="${stormlib_version#v}" \
   --entrypoint sh "$image" -s <<'CHECK'
 set -eu
 
 export DEBIAN_FRONTEND=noninteractive
 
-go version | grep -F "go$EXPECTED_GO_VERSION linux/$EXPECTED_ARCH"
-test "$(dpkg --print-architecture)" = "$EXPECTED_ARCH"
-sqlc version | grep -F "$EXPECTED_SQLC_VERSION"
-golangci-lint --version | grep -F "${EXPECTED_GOLANGCI_VERSION#v}"
+go version
+sqlc version
 git --version
+test "$(dpkg --print-architecture)" = "$EXPECTED_ARCH" ||
+  { echo "architecture mismatch" >&2; exit 1; }
+go version | grep -Fq "linux/$EXPECTED_ARCH" ||
+  { echo "go reports a different architecture" >&2; exit 1; }
 test -s /etc/ssl/certs/ca-certificates.crt
 
 for package in ca-certificates gcc git libc6-dev libbz2-dev zlib1g-dev; do
-  dpkg-query -W "$package" >/dev/null
+  dpkg-query -W "$package" >/dev/null || { echo "missing package: $package" >&2; exit 1; }
  done
 for package in cmake curl g++ gnupg make mercurial openssh-client pkg-config python3 subversion wget; do
   if dpkg-query -W "$package" >/dev/null 2>&1; then
@@ -208,59 +152,21 @@ done
 
 for file in /usr/share/doc/go/LICENSE \
             /usr/share/doc/go/PATENTS \
-            /usr/share/doc/go/PROVENANCE \
             /usr/share/doc/sqlc/LICENSE \
-            /usr/share/doc/sqlc/PROVENANCE \
-            /usr/share/doc/golangci-lint/LICENSE \
-            /usr/share/doc/golangci-lint/PROVENANCE \
-            /usr/share/source/golangci-lint/source.tar.gz \
-            /usr/share/doc/stormlib/LICENSE \
-            /usr/share/doc/stormlib/PROVENANCE \
-            /usr/share/doc/mapservice-build/NOTICE.md; do
-  test -s "$file"
+            /usr/share/doc/stormlib/LICENSE; do
+  test -s "$file" || { echo "missing license file: $file" >&2; exit 1; }
 done
-
-grep -F 'Copyright 2009 The Go Authors.' /usr/share/doc/go/LICENSE
-grep -F 'MIT License' /usr/share/doc/sqlc/LICENSE
-grep -F 'GNU GENERAL PUBLIC LICENSE' /usr/share/doc/golangci-lint/LICENSE
-grep -F 'The MIT License (MIT)' /usr/share/doc/stormlib/LICENSE
-
-grep -F "Source URL: https://codeload.github.com/golang/go/tar.gz/$EXPECTED_GO_COMMIT" \
-  /usr/share/doc/go/PROVENANCE
-grep -F "Source tag: go$EXPECTED_GO_VERSION" /usr/share/doc/go/PROVENANCE
-grep -F "Source commit: $EXPECTED_GO_COMMIT" /usr/share/doc/go/PROVENANCE
-grep -F "Source archive SHA256: $EXPECTED_GO_SHA" /usr/share/doc/go/PROVENANCE
-grep -F "Source URL: https://codeload.github.com/sqlc-dev/sqlc/tar.gz/$EXPECTED_SQLC_COMMIT" \
-  /usr/share/doc/sqlc/PROVENANCE
-grep -F "Source tag: v$EXPECTED_SQLC_VERSION" /usr/share/doc/sqlc/PROVENANCE
-grep -F "Source commit: $EXPECTED_SQLC_COMMIT" /usr/share/doc/sqlc/PROVENANCE
-grep -F "Source archive SHA256: $EXPECTED_SQLC_SHA" /usr/share/doc/sqlc/PROVENANCE
-grep -F "Source URL: https://codeload.github.com/golangci/golangci-lint/tar.gz/$EXPECTED_GOLANGCI_COMMIT" \
-  /usr/share/doc/golangci-lint/PROVENANCE
-grep -F "Source tag: $EXPECTED_GOLANGCI_VERSION" /usr/share/doc/golangci-lint/PROVENANCE
-grep -F "Source commit: $EXPECTED_GOLANGCI_COMMIT" /usr/share/doc/golangci-lint/PROVENANCE
-grep -F "Source archive SHA256: $EXPECTED_GOLANGCI_SHA" /usr/share/doc/golangci-lint/PROVENANCE
-grep -F "Source URL: https://codeload.github.com/ladislav-zezula/StormLib/tar.gz/$EXPECTED_STORMLIB_COMMIT" \
-  /usr/share/doc/stormlib/PROVENANCE
-grep -F "Source tag: v$EXPECTED_STORMLIB_VERSION" /usr/share/doc/stormlib/PROVENANCE
-grep -F "Source commit: $EXPECTED_STORMLIB_COMMIT" /usr/share/doc/stormlib/PROVENANCE
-grep -F "Source archive SHA256: $EXPECTED_STORMLIB_SHA" /usr/share/doc/stormlib/PROVENANCE
-
-grep -F "License: BSD-3-Clause" /usr/share/doc/go/PROVENANCE
-grep -F "License: MIT" /usr/share/doc/sqlc/PROVENANCE
-grep -F "License: GPL-3.0" /usr/share/doc/golangci-lint/PROVENANCE
-grep -F "golangci-lint $EXPECTED_GOLANGCI_VERSION" /usr/share/doc/mapservice-build/NOTICE.md
-grep -F "License: MIT" /usr/share/doc/stormlib/PROVENANCE
-printf '%s  %s\n' "$EXPECTED_GOLANGCI_SHA" /usr/share/source/golangci-lint/source.tar.gz | sha256sum --check --status
-tar -tzf /usr/share/source/golangci-lint/source.tar.gz | grep -Eq '/LICENSE$'
-grep -F 'Corresponding source: /usr/share/source/golangci-lint/source.tar.gz' \
-  /usr/share/doc/golangci-lint/PROVENANCE
+grep -F 'Copyright 2009 The Go Authors.' /usr/share/doc/go/LICENSE >/dev/null
+grep -F 'MIT License' /usr/share/doc/sqlc/LICENSE >/dev/null
+grep -F 'The MIT License (MIT)' /usr/share/doc/stormlib/LICENSE >/dev/null
 
 test -s /usr/local/lib/libstorm.so
 test -s /usr/local/include/StormLib.h
-ldd /usr/local/lib/libstorm.so
+ldd /usr/local/lib/libstorm.so >/dev/null
 grep -F "STORMLIB_VERSION_STRING         \"$EXPECTED_STORMLIB_VERSION\"" \
-  /usr/local/include/StormLib.h
+  /usr/local/include/StormLib.h >/dev/null ||
+  { echo "StormLib header version does not match the pin" >&2; exit 1; }
+
 smoke_root=$(mktemp -d)
 mkdir "$smoke_root/storm"
 cat > "$smoke_root/storm/go.mod" <<'EOF'
@@ -276,12 +182,18 @@ package main
 #cgo LDFLAGS: -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lstorm
 #include <StormLib.h>
 static const char *stormVersion(void) { return STORMLIB_VERSION_STRING; }
+// Calling an exported symbol proves the shared object actually links and loads
+// at runtime. Reading the header macro alone only proves the headers are there.
+static int stormCallExport(void) { SFileSetLocale(0); return 1; }
 */
 import "C"
 
 func main() {
 	if C.GoString(C.stormVersion())[0] != '9' {
 		panic("unexpected StormLib version")
+	}
+	if C.stormCallExport() != 1 {
+		panic("StormLib exported call failed")
 	}
 }
 EOF
@@ -391,11 +303,10 @@ trap - EXIT
 rm -f /tmp/proxy-ready /tmp/proxy-hit
 rm -rf "$smoke_root"
 
-for path in /tmp/upstream /tmp/metadata /tmp/go.tar.gz /tmp/sqlc.tar.gz \
-            /tmp/golangci-lint.tar.gz /tmp/stormlib.tar.gz /tmp/stormlib \
+for path in /tmp/upstream /tmp/stormlib.tar.gz /tmp/stormlib \
             /tmp/stormlib-build /workspace /app /root/.ssh /root/.git \
-            /usr/src/wordpress /usr/src/sqlc /usr/src/golangci-lint; do
-  test ! -e "$path"
+            /usr/src/sqlc; do
+  test ! -e "$path" || { echo "build leftover in final image: $path" >&2; exit 1; }
 done
 CHECK
 

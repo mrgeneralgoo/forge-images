@@ -12,7 +12,7 @@ same hardened workflow. Product-specific details live in each image directory.
 |---|---|---|
 | [`dae`](dae/) | dae eBPF transparent proxy with managed rule and GeoData updates | [`dae/README.md`](dae/README.md) |
 | [`fava`](fava/) | Fava accounting web UI served by preloaded Gunicorn | [`fava/README.md`](fava/README.md) |
-| [`mapservice-build`](mapservice-build/) | Pinned Go, CGO, StormLib, sqlc, and golangci-lint build environment | [`mapservice-build/README.md`](mapservice-build/README.md) |
+| [`mapservice-build`](mapservice-build/) | Pinned Go, CGO, StormLib, and sqlc build environment | [`mapservice-build/README.md`](mapservice-build/README.md) |
 | [`wordpress-frankenphp`](wordpress-frankenphp/) | WordPress core on FrankenPHP with curated PHP extensions | [`wordpress-frankenphp/README.md`](wordpress-frankenphp/README.md) |
 
 Canonical image names use the directory slug:
@@ -105,4 +105,4 @@ full `sha-<git-commit>` tag format; older tags are not removed.
 
 Repository-authored files are Apache-2.0 licensed; see [`LICENSE`](LICENSE) and
 [`NOTICE.md`](NOTICE.md). Bundled upstream components retain their own licenses,
-which are documented by each image.
+which are carried inside each image under `/usr/share/doc`.

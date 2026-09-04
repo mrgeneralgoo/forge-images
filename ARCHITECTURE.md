@@ -288,14 +288,36 @@ without a demonstrated consumer requirement.
 ## Dependency and metadata policy
 
 - Pin every `FROM` image and GitHub Action by digest.
+- Prefer the widest upstream tag that still keeps the image correct, and let the
+  digest do the pinning. A tag narrow enough to be frozen by upstream (an exact
+  patch tag such as `golang:1.27.0-trixie`) stops receiving digest updates once
+  the next patch ships, which silently ends security updates while CI stays
+  green. Narrow the tag only for a stated reason, such as `golang:trixie` keeping
+  the build stage aligned with the `debian:trixie-slim` runtime.
+- A digest literal must appear exactly once per upstream image. When an image is
+  referenced only by its `FROM` line, that line is the single copy and needs
+  nothing further. When the digest is also needed in a label or a file baked into
+  the image, declare it once as `ARG <NAME>_REF=image:tag@sha256:...` before the
+  first `FROM`, build with `FROM ${<NAME>_REF}`, and derive every other mention
+  (`${<NAME>_REF##*@}` for the digest, `${<NAME>_REF%%@*}` for the tagged name).
+  A second literal copy is a pin Renovate will not update, and it drifts silently
+  because nothing compares the copies against each other.
 - Pin direct language/tool dependencies where their manager supports it.
 - Let Renovate update pins; manually review protected runtime and toolchain
   families defined in `renovate.json`.
 - Every Dockerfile accepts `ARG VCS_REF=unknown` and records
   `org.opencontainers.image.source` and
   `org.opencontainers.image.revision` labels.
-- Add title, description, license, version, and upstream digest labels where they
-  have clear product-level meanings.
+- Add title, description, license, and upstream digest labels where they have
+  clear product-level meanings. Do not add a version label to an image that
+  tracks a floating tag; the version is not stable enough to state and would
+  have to be hand-edited on every upstream release.
+- `test.sh` validates the built image, never the Dockerfile's version text. It
+  reads pins from the Dockerfile and checks that the image agrees with them; it
+  must not hardcode an upstream version or digest, because that turns every
+  upstream release into a red pull request.
+- Copy upstream license files into `/usr/share/doc` from whatever source already
+  carries them; do not download a source archive solely to obtain a license.
 - Never bake credentials, deployment configuration, or consumer data into an
   image.
 
