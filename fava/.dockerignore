@@ -1,5 +1,4 @@
-.git
-**/.DS_Store
-test.sh
-
-README.md
+*
+!Dockerfile
+!requirements.txt
+!fava_wsgi.py
