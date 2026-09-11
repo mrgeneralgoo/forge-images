@@ -4,7 +4,7 @@
 # retriggers the publish workflow. Transitive deps resolve at build time.
 fava==1.30.16
 beancount==3.2.3
-fava-dashboards==2.0.1
+fava-dashboards==2.0.2
 a2wsgi==1.10.10
 anyio==4.13.0
 starlette==1.3.1
