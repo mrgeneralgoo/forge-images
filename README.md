@@ -61,7 +61,7 @@ Vulnerability findings are informational; scanner, registry, attestation, and
 signing operational failures remain fatal. Public tag updates use bounded
 retries. Successful promotion does not run duplicate repair work; failed or
 cancelled publication starts the independent reconciliation workflow. Manual
-recovery and scheduled full-history sweeps remain available, so partial
+recovery and scheduled latest repair remain available, so partial
 cross-registry promotion can be recovered without rebuilding. See
 [`.github/vulnerability-policy.md`](.github/vulnerability-policy.md).
 

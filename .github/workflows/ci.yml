@@ -176,8 +176,8 @@ jobs:
             abort "invalid workflow recovery truth table: #{event_name}/#{conclusion}" unless
               workflow_recovery.call(event_name, same_repository, conclusion) == expected
           end
-          abort 'scheduled SHA sweep condition changed' unless
-            recovery.fetch('jobs').fetch('sweep-sha-history').fetch('if') == "github.event_name == 'schedule'"
+          abort 'scheduled SHA sweep remains enabled' if
+            recovery.fetch('jobs').key?('sweep-sha-history')
           abort 'scheduled latest sweep condition changed' unless
             recovery.fetch('jobs').fetch('sweep-latest').fetch('if') == "github.event_name == 'schedule'"
 
@@ -285,8 +285,13 @@ jobs:
           grep -F "group: reconcile-sha-${gha}{{ needs.resolve.outputs.image }}-${gha}{{ needs.resolve.outputs.release_sha }}" "$recovery" >/dev/null
           grep -F "group: publish-${gha}{{ matrix.image }}" "$recovery" >/dev/null
           grep -F 'cancel-in-progress: false' "$recovery" >/dev/null
+          grep -F 'RECONCILE_MODE: latest' "$recovery" >/dev/null
+          if grep -Fq 'RECONCILE_MODE: sha' "$recovery"; then
+            echo 'scheduled full-history SHA reconciliation remains enabled' >&2
+            exit 1
+          fi
           grep -F 'run: .github/scripts/reconcile-public-tags.sh' "$recovery" >/dev/null
-          test "$(grep -c -F 'run: .github/scripts/reconcile-publication-history.sh' "$recovery")" -eq 2
+          test "$(grep -c -F 'run: .github/scripts/reconcile-publication-history.sh' "$recovery")" -eq 1
           grep -F 'while :' "$history" >/dev/null
           grep -F 'page=$((page + 1))' "$history" >/dev/null
           grep -F 'per_page=100&page=$page' "$history" >/dev/null

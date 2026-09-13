@@ -139,45 +139,6 @@ jobs:
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - run: .github/scripts/reconcile-public-tags.sh
 
-  sweep-sha-history:
-    if: github.event_name == 'schedule'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - image: dae
-            workflow_file: dae.yml
-          - image: fava
-            workflow_file: fava.yml
-          - image: mapservice-build
-            workflow_file: mapservice-build.yml
-          - image: wordpress-frankenphp
-            workflow_file: wordpress-frankenphp.yml
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      GHCR_IMAGE: ghcr.io/mrgeneralgoo/${{ matrix.image }}
-      DOCKERHUB_IMAGE: docker.io/mrgeneralgoo/${{ matrix.image }}
-      RECONCILE_MODE: sha
-      WORKFLOW_FILE: ${{ matrix.workflow_file }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          username: ${{ secrets.REGISTRY_USERNAME_DOCKER_HUB }}
-          password: ${{ secrets.REGISTRY_PASSWORD_DOCKER_HUB }}
-
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-      - run: .github/scripts/reconcile-publication-history.sh
-
   sweep-latest:
     if: github.event_name == 'schedule'
     strategy:

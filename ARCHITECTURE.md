@@ -169,12 +169,9 @@ with bounded backoff, and treats GHCR as the commit point when repairing a
 split tag. Successful promotion is already verified by that script and does not
 run an immediate repair or a second `workflow_run` recovery. Failed or cancelled
 publication starts `.github/workflows/reconcile-public-tags.yml`, and operators
-can rerun it manually without rebuilding. Every six hours it also paginates
-through the complete main-branch publication history and repairs every
-discoverable `sha-*` reference, so a pending job displaced by later publications
-is re-enqueued from durable GitHub run history. A separate sweep repairs
-`latest` to the newest published SHA while holding the image's publication
-concurrency group.
+can rerun it manually without rebuilding. Every six hours it repairs `latest`
+to the newest published SHA while holding the image's publication concurrency
+group.
 
 #### Recovery Actions flow
 
@@ -197,10 +194,7 @@ flowchart TD
     DH_LATEST --> GHCR_LATEST["converge GHCR latest"]
     GHCR_LATEST --> DONE
 
-    SCHEDULE["schedule: every 6 hours"] --> HISTORY["sweep-sha-history"]
-    HISTORY --> PAGINATE["paginate complete main publication history"]
-    PAGINATE --> REPAIR_SHA["repair every discoverable sha tag"]
-    SCHEDULE --> LATEST["sweep-latest under publication lock"]
+    SCHEDULE["schedule: every 6 hours"] --> LATEST["sweep-latest under publication lock"]
     LATEST --> NEWEST["repair latest to newest published SHA"]
 ```
 
