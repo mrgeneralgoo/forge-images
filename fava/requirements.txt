@@ -8,5 +8,5 @@ fava-dashboards==2.0.2
 a2wsgi==1.10.10
 anyio==4.15.1
 starlette==1.6.0
-uvicorn==0.52.4
+uvicorn==0.53.0
 gunicorn==26.2.0
