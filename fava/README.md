@@ -27,6 +27,19 @@ Architectures: `linux/amd64`, `linux/arm64`.
 - The pinned Starlette, `a2wsgi`, and Uvicorn packages are available to derived
   services in the same `/opt/venv`.
 
+## Port migration
+
+The default container HTTP port is now **8000** (previously 5000), matching
+ASGI-based derived services. This also avoids the usual macOS AirPlay Receiver
+conflict when publishing the same port on the host. Container ports themselves
+do not conflict with host services; only the published host port must be free.
+
+When upgrading to a new image digest, update Docker mappings to `8000:8000`
+(or `<free-host-port>:8000`), Compose target ports, health probes, and reverse
+proxy upstream ports together. Existing deployments pinned to an older digest
+continue listening on 5000. If 8000 is already occupied on the host (for example
+by a derived service), publish another port such as `8081:8000`.
+
 ## Default usage
 
 ```bash
@@ -36,11 +49,11 @@ docker run -d \
   -e FAVA_BEANFILE=/data/main.bean \
   -e FAVA_PREFIX=/fava \
   -e FAVA_WORKERS=3 \
-  -p 5000:5000 \
+  -p 8000:8000 \
   ghcr.io/mrgeneralgoo/fava@sha256:<digest>
 ```
 
-Open `http://localhost:5000/fava/`. The default root ledger is
+Open `http://localhost:8000/fava/`. The default root ledger is
 `/data/main.bean` and the default HTTP prefix is `/fava`.
 
 | Variable | Default | Purpose |

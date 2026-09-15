@@ -20,7 +20,7 @@ Config via env:
   FAVA_BEANFILE  path to the root .bean            (default /data/main.bean)
   FAVA_PREFIX    URL prefix, "" to disable          (default /fava)
 
-Run:  gunicorn --preload -w ${FAVA_WORKERS:-3} -b 0.0.0.0:5000 fava_wsgi:app
+Run:  gunicorn --preload -w ${FAVA_WORKERS:-3} -b 0.0.0.0:8000 fava_wsgi:app
 """
 from __future__ import annotations
 

@@ -71,9 +71,9 @@ BEAN
 docker run -d --name "$container" \
   -v "$workdir/main.bean:/data/main.bean:ro" \
   -e FAVA_WORKERS=1 \
-  -p 127.0.0.1::5000 \
+  -p 127.0.0.1::8000 \
   "$image"
-base_port=$(docker port "$container" 5000/tcp | awk -F: 'NR == 1 { print $NF }')
+base_port=$(docker port "$container" 8000/tcp | awk -F: 'NR == 1 { print $NF }')
 base_url="http://127.0.0.1:$base_port"
 
 for _ in $(seq 1 30); do
@@ -95,15 +95,15 @@ grep -Eq 'Assets:Cash|Opening-Balances' "$query_response"
 # A downstream image can replace CMD with a plain ASGI service. This checks
 # that the override starts only Uvicorn and does not import or start Fava.
 docker run -d --name "$override_container" \
-  -p 127.0.0.1::5000 \
+  -p 127.0.0.1::8000 \
   "$image" sh -c 'printf "%s\n" \
     "from a2wsgi import WSGIMiddleware" \
     "def wsgi(environ, start_response):" \
     "    start_response(\"200 OK\", [(\"content-type\", \"text/plain\")])" \
     "    return [b\"override\"]" \
     "app = WSGIMiddleware(wsgi)" \
-    > /tmp/asgi.py; exec uvicorn --app-dir /tmp --host 0.0.0.0 --port 5000 asgi:app'
-override_port=$(docker port "$override_container" 5000/tcp | awk -F: 'NR == 1 { print $NF }')
+    > /tmp/asgi.py; exec uvicorn --app-dir /tmp --host 0.0.0.0 --port 8000 asgi:app'
+override_port=$(docker port "$override_container" 8000/tcp | awk -F: 'NR == 1 { print $NF }')
 override_url="http://127.0.0.1:$override_port"
 
 override_response="$workdir/override-response.txt"

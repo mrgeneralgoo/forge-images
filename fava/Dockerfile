@@ -29,7 +29,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     FAVA_BEANFILE=/data/main.bean \
     FAVA_PREFIX=/fava
 
-EXPOSE 5000
+EXPOSE 8000
 
 LABEL org.opencontainers.image.title="Fava" \
       org.opencontainers.image.description="Fava and fava-dashboards served by preloaded multi-process Gunicorn." \
@@ -42,4 +42,4 @@ USER fava
 # --timeout 120: a heavy BQL query on a slow board can take several seconds.
 # The command is intentionally overridable: a downstream image can replace it
 # without importing this module or starting the default Fava server.
-CMD ["sh", "-c", "exec gunicorn --preload -w ${FAVA_WORKERS:-3} --timeout 120 -b 0.0.0.0:5000 fava_wsgi:app"]
+CMD ["sh", "-c", "exec gunicorn --preload -w ${FAVA_WORKERS:-3} --timeout 120 -b 0.0.0.0:8000 fava_wsgi:app"]
