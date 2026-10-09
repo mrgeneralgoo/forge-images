@@ -1,5 +1,5 @@
 ARG WORDPRESS_REF=wordpress:latest@sha256:74103f21d460e96abdee0dc304852a00823950bef3cb343ba855e19b6983c31d
-ARG PHP_REF=serversideup/php:frankenphp@sha256:558d9d93d8f63a08ea6c99a48475faff557d8bd315bb81a876181e9ec1e50865
+ARG PHP_REF=serversideup/php:frankenphp@sha256:c46f867c3eb2400fac411b2226a27856e49e94dcfb41b953d7a731d5dad41d97
 
 FROM ${WORDPRESS_REF} AS wordpress-core
 
