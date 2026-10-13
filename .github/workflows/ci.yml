@@ -367,12 +367,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           jq -e '
-            .platformAutomerge == false and
-            .prHourlyLimit == 2 and
-            .prConcurrentLimit == 5 and
+            .extends == ["github>mrgeneralgoo/renovate-config:public"] and
+            all(.packageRules[];
+              .automerge != true and .groupName == null and .groupSlug == null) and
             any(.packageRules[];
               .matchManagers == ["github-actions"] and
-              .groupName == "GitHub Actions") and
+              .automerge == false) and
             any(.packageRules[];
               .automerge == false and
               .matchManagers == ["dockerfile"] and
@@ -389,8 +389,9 @@ jobs:
                 "wordpress"
               ] | sort))) and
             any(.packageRules[];
-              .automerge == true and
-              (.matchUpdateTypes | index("digest")) != null)
+              .matchManagers == ["custom.regex"] and
+              .matchPackageNames == ["ladislav-zezula/StormLib"] and
+              .automerge == false and .dependencyDashboardApproval == true)
           ' renovate.json >/dev/null
 
       - name: Validate vulnerability documentation policy
