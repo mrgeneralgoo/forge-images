@@ -1,19 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
-    "docker:enableMajor",
-    "docker:pinDigests",
-    "helpers:pinGitHubActionDigests"
+    "github>mrgeneralgoo/renovate-config:public"
   ],
-  "timezone": "Asia/Shanghai",
   "labels": [
     "dependencies"
   ],
-  "platformAutomerge": false,
-  "dependencyDashboard": true,
-  "prHourlyLimit": 2,
-  "prConcurrentLimit": 5,
   "customManagers": [
     {
       "customType": "regex",
@@ -29,26 +21,6 @@
     }
   ],
   "packageRules": [
-    {
-      "matchUpdateTypes": [
-        "minor",
-        "patch",
-        "pin",
-        "digest"
-      ],
-      "automerge": true,
-      "automergeType": "pr",
-      "automergeStrategy": "squash"
-    },
-    {
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "automerge": false
-    },
     {
       "matchDatasources": [
         "github-tags"
@@ -66,7 +38,6 @@
       "matchManagers": [
         "github-actions"
       ],
-      "groupName": "GitHub Actions",
       "automerge": false
     },
     {
