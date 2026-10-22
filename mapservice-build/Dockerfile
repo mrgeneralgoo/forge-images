@@ -9,9 +9,9 @@ ARG STORMLIB_ARCHIVE_SHA256=f584f35edf9cb7f5e6adc65ee467ddfcf5f5b2d06445a0b6a3f2
 # Upstream images: floating tag for tracking, digest for reproducibility. Each
 # digest literal appears exactly once, so a Renovate digest bump is a one-line
 # change with nothing else to keep in sync.
-ARG GO_REF=golang:trixie@sha256:47667934874913a449b96faa7ef4777fa285d9ec29126ee80ed61c45b7cccf0e
+ARG GO_REF=golang:trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4
 ARG SQLC_REF=sqlc/sqlc:latest@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
-ARG DEBIAN_REF=debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+ARG DEBIAN_REF=debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 FROM ${SQLC_REF} AS sqlc
 
