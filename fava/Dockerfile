@@ -1,14 +1,24 @@
-FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
-ARG VCS_REF=unknown
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS python-base
+
+FROM python-base AS build
+
+# Build Beancount from source when PyPI has no wheel for this Python version.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev bison flex \
+    && rm -rf /var/lib/apt/lists/*
 
 # Keep every Python dependency in one application environment. The image has
 # no global pip install, so downstream applications can inherit /opt/venv
 # without accidentally carrying a second copy of Fava.
 COPY requirements.txt /tmp/requirements.txt
 RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt \
-    && useradd --create-home --shell /usr/sbin/nologin fava \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+
+FROM python-base
+ARG VCS_REF=unknown
+
+COPY --from=build /opt/venv /opt/venv
+RUN useradd --create-home --shell /usr/sbin/nologin fava \
     && mkdir -p /opt/fava \
     && /opt/venv/bin/pip freeze > /opt/fava/requirements-installed.txt \
     && chown -R fava:fava /opt/fava
