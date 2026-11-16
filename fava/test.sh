@@ -49,7 +49,7 @@ CHECK
 )
 printf '%s\n' "$runtime_check"
 gunicorn_version=$(awk -F== '$1 == "gunicorn" { print $2 }' <<<"$runtime_check")
-grep -Eq '^Python 3\.14\.' <<<"$runtime_check"
+grep -Eq '^Python 3\.15\.' <<<"$runtime_check"
 grep -F "gunicorn (version $gunicorn_version)" <<<"$runtime_check" >/dev/null
 grep -Fxq 'runtime checks passed' <<<"$runtime_check"
 

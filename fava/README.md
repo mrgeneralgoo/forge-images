@@ -15,7 +15,7 @@ Architectures: `linux/amd64`, `linux/arm64`.
 
 ## Runtime contract
 
-- Python 3.14 and all Python packages are installed in the single `/opt/venv`.
+- Python 3.15 and all Python packages are installed in the single `/opt/venv`.
 - The image runs as a dynamically created non-root `fava` user; no host UID/GID
   is baked into the image.
 - The default command uses preloaded multi-process Gunicorn. The ledger is
