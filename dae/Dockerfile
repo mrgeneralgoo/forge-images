@@ -10,7 +10,7 @@
 # Both paths are overridable via DAE_RUNTIME / DAE_RULE_MANIFEST.
 #
 # The FROM digest is pinned; Renovate opens bump PRs.
-FROM daeuniverse/dae:latest@sha256:e9c8bf973e0f2a746503efa654248f2c4edc00d9fc3c3b33829a9c732d93bb37
+FROM daeuniverse/dae:latest@sha256:1c3edfeb0754186e39b3f084798233e778a30a833b37ca97935fe638a8f99ad9
 ARG VCS_REF=unknown
 
 # The base image ships only busybox sh + wget; add the updater toolchain.
